@@ -105,7 +105,7 @@ Trace Ingestion ──▶ Event Bus ──▶ Failure Classifier
 * JWT revocation (Redis‑backed when configured)
 * Rate limiting (in‑memory demo, Redis optional)
 
-> ⚠️ This is a production‑adjacent demo. Advanced enterprise security features (SSO, compliance exports, etc.) are intentionally out of scope for this repository.
+> ⚠️ This is a production‑adjacent demo.
 
 ---
 
@@ -286,7 +286,6 @@ This repo includes clean, spec-friendly drawings under `docs/figures/`:
 * A multi‑cluster or HA setup
 * A compliance‑certified system
 
-Enterprise capabilities are intentionally separated to keep the open‑source core clear and maintainable.
 
 ---
 
