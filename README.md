@@ -258,7 +258,7 @@ An example compose file is provided in `docker-compose.prod.yml`.
 
 ---
 
-## 🖼️ Drawings (Patent-friendly figures)
+## 🖼️ Drawings
 
 This repo includes clean, spec-friendly drawings under `docs/figures/`:
 
