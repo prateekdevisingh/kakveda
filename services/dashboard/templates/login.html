@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Login</title>
+  <style>
+    body { font-family: system-ui, Arial; background: #0b1220; color: #e6edf3; }
+    .card { max-width: 420px; margin: 8vh auto; background: #111a2e; padding: 24px; border-radius: 12px; border: 1px solid #24304a; }
+    input, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2b3a58; background: #0b1220; color: #e6edf3; }
+    button { cursor: pointer; background: #2563eb; border: none; margin-top: 10px; }
+    a { color: #93c5fd; }
+    .err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Login</h2>
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <form method="post" action="/auth/login">
+      <label>Email</label>
+      <input name="email" type="email" required />
+      <label style="display:block;margin-top:10px;">Password</label>
+      <input name="password" type="password" required />
+      <button type="submit">Sign in</button>
+    </form>
+    <p style="margin-top:12px;"><a href="/auth/register">Create account</a> · <a href="/auth/forgot">Forgot password</a></p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Admin Agents</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items:center; }
+    .adminBanner{display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; background: rgba(251,113,133,.16); border:1px solid rgba(251,113,133,.30); margin-right:10px; font-weight:700;}
+    .wrap { padding: 18px; }
+    .small { color: var(--muted); font-size: 0.9em; }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border: 1px solid rgba(37,99,235,.35); }
+    .msg { padding: 10px 12px; border-radius: 10px; margin: 10px 0; }
+    .msgOk { background: rgba(34,197,94,.14); border: 1px solid rgba(34,197,94,.25); }
+    .msgErr { background: rgba(251,113,133,.14); border: 1px solid rgba(251,113,133,.25); }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    input[type=text] { width: 100%; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <span class="adminBanner">ADMIN</span>
+      <strong>Agent Registry</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/admin/users">Users</a> · <a href="/admin/audit">Audit</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if message %}
+      <div class="msg msgOk">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="msg msgErr">{{ error }}</div>
+    {% endif %}
+
+    <div class="card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">Register / Update agent</h3>
+      <div class="small" style="margin-bottom:10px">
+        This is a lightweight, MLflow/LangSmith-style registry. Agents are external services that expose <span class="pill">GET /health</span>.
+        Secrets are referenced by env var name (e.g. <span class="pill">MY_AGENT_TOKEN</span>) and are not stored in the DB.
+      </div>
+      <form method="post" action="/admin/agents/register" class="grid">
+        {{ csrf_input(request) | safe }}
+        <div>
+          <label class="small">Name (unique)</label>
+          <input name="name" type="text" placeholder="my-agent" required />
+        </div>
+        <div>
+          <label class="small">Base URL</label>
+          <input name="base_url" type="text" placeholder="http://agent:8120" required />
+        </div>
+        <div>
+          <label class="small">Description</label>
+          <input name="description" type="text" placeholder="Failure triage agent" />
+        </div>
+        <div>
+          <label class="small">Capabilities (comma-separated)</label>
+          <input name="capabilities" type="text" placeholder="classify_failure,suggest_fix" />
+        </div>
+        <div>
+          <label class="small">Events in (comma-separated)</label>
+          <input name="events_in" type="text" placeholder="trace.ingested" />
+        </div>
+        <div>
+          <label class="small">Events out (comma-separated)</label>
+          <input name="events_out" type="text" placeholder="failure.classified" />
+        </div>
+        <div>
+          <label class="small">Auth type</label>
+          <select name="auth_type">
+            <option value="none">none</option>
+            <option value="bearer">bearer</option>
+            <option value="api_key_header">api_key_header</option>
+          </select>
+        </div>
+        <div>
+          <label class="small">Auth header name (only for api_key_header)</label>
+          <input name="auth_header_name" type="text" placeholder="X-API-Key" />
+        </div>
+        <div style="grid-column: 1 / -1;">
+          <label class="small">Auth secret ref (env var name)</label>
+          <input name="auth_secret_ref" type="text" placeholder="MY_AGENT_TOKEN" />
+        </div>
+        <div style="grid-column: 1 / -1; display:flex; justify-content:flex-end;">
+          <button class="btn" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Registered agents</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Base URL</th>
+            <th>Enabled</th>
+            <th>Capabilities</th>
+            <th>Events</th>
+            <th>Auth</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in agents %}
+          <tr>
+            <td><span class="pill">{{ a.name }}</span><div class="small">{{ a.description or '' }}</div></td>
+            <td class="small">{{ a.base_url }}</td>
+            <td>{{ 'yes' if a.enabled else 'no' }}</td>
+            <td class="small">{{ (a.capabilities or []) | join(', ') }}</td>
+            <td class="small">
+              in: {{ (a.events_in or []) | join(', ') }}<br/>
+              out: {{ (a.events_out or []) | join(', ') }}
+            </td>
+            <td class="small">{{ a.auth_type }}{% if a.auth_secret_ref %} ({{ a.auth_secret_ref }}){% endif %}</td>
+            <td>
+              <form method="post" action="/admin/agents/{{ a.id }}/toggle" style="display:inline-block;">
+                {{ csrf_input(request) | safe }}
+                <button class="btn" type="submit">Toggle</button>
+              </form>
+              <form method="post" action="/admin/agents/{{ a.id }}/test" style="display:inline-block;">
+                {{ csrf_input(request) | safe }}
+                <button class="btn" type="submit">Test /health</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="small">Tip: for local docker-compose agents, use base_url like <span class="pill">http://agent_echo:8120</span> (service name).</p>
+    </div>
+  </div>
+</body>
+</html>

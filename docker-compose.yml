@@ -1,0 +1,135 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    # Expose for optional host-side testing; dashboard talks over the docker network.
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  event-bus:
+    build:
+      context: .
+      dockerfile: services/event_bus/Dockerfile
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./config:/app/config:ro
+
+  gfkb:
+    build:
+      context: .
+      dockerfile: services/gfkb/Dockerfile
+    ports:
+      - "8101:8101"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    ports:
+      - "8102:8102"
+    environment:
+      - EVENT_BUS_URL=http://event-bus:8100
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - event-bus
+
+  failure-classifier:
+    build:
+      context: .
+      dockerfile: services/failure_classifier/Dockerfile
+    ports:
+      - "8103:8103"
+    environment:
+      - EVENT_BUS_URL=http://event-bus:8100
+      - GFKB_URL=http://gfkb:8101
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - event-bus
+      - gfkb
+
+  pattern-detector:
+    build:
+      context: .
+      dockerfile: services/pattern_detector/Dockerfile
+    ports:
+      - "8104:8104"
+    environment:
+      - EVENT_BUS_URL=http://event-bus:8100
+      - GFKB_URL=http://gfkb:8101
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - event-bus
+      - gfkb
+
+  warning-policy:
+    build:
+      context: .
+      dockerfile: services/warning_policy/Dockerfile
+    ports:
+      - "8105:8105"
+    environment:
+      - GFKB_URL=http://gfkb:8101
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - gfkb
+
+  health-scoring:
+    build:
+      context: .
+      dockerfile: services/health_scoring/Dockerfile
+    ports:
+      - "8106:8106"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    environment:
+      - GFKB_URL=http://gfkb:8101
+      - HEALTH_URL=http://health-scoring:8106
+      # Prefer in-compose Ollama service (no host networking/firewall issues).
+      # Override by exporting OLLAMA_URL if you want to use a remote Ollama.
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:1b}
+      # Demo pricing knobs (USD per 1K tokens). Defaults are intentionally small but non-zero
+      # so the UI shows cost tracking without needing extra setup.
+      - OLLAMA_PRICE_PER_1K_INPUT=${OLLAMA_PRICE_PER_1K_INPUT:-0.001}
+      - OLLAMA_PRICE_PER_1K_OUTPUT=${OLLAMA_PRICE_PER_1K_OUTPUT:-0.002}
+      # Allow CLI/.env to control DB + secrets. Keep demo-safe defaults.
+      - DASHBOARD_DB_URL=${DASHBOARD_DB_URL:-sqlite:////app/data/dashboard.db}
+      - DASHBOARD_JWT_SECRET=${DASHBOARD_JWT_SECRET:-dev-secret-change-me}
+      - KAKVEDA_REDIS_URL=${KAKVEDA_REDIS_URL:-}
+      - KAKVEDA_OTEL_ENABLED=${KAKVEDA_OTEL_ENABLED:-0}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - gfkb
+      - health-scoring
+      - ollama
+    ports:
+      - "8110:8110"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+
+  agent-echo:
+    build:
+      context: .
+      dockerfile: services/agent_echo/Dockerfile
+    environment:
+      - AGENT_NAME=agent-echo
+    ports:
+      - "8120:8120"
+
+volumes:
+  ollama_data:

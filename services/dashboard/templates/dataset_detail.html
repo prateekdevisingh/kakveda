@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Dataset {{ dataset.name }}</title>
+  <style>
+    :root{--bg:#05060a;--border:#1f2a44;--text:#e6edf3;--muted:#9aa8bf;--accent:#7c3aed;--accent2:#06b6d4;}
+    body{font-family:system-ui,Arial; background: radial-gradient(1200px 600px at 20% 0%, rgba(124,58,237,.18), transparent 60%), radial-gradient(900px 500px at 90% 10%, rgba(6,182,212,.12), transparent 55%), var(--bg); color:var(--text); margin:0;}
+    header{padding:14px 18px; background: rgba(11,15,24,0.75); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
+    a{color:#a5b4fc; text-decoration:none}
+    .wrap{padding:18px;}
+    .card{background: linear-gradient(180deg, rgba(15,22,39,0.95), rgba(11,15,24,0.95)); border: 1px solid var(--border); border-radius: 14px; padding: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.45);}
+    .small{color:var(--muted); font-size:.9em}
+    table{width:100%; border-collapse:collapse; font-size:.92em}
+    th,td{padding:10px; border-bottom: 1px solid rgba(31,42,68,.7); text-align:left; vertical-align: top;}
+    th{color:var(--muted); font-weight:600}
+    input, textarea, select{padding:10px; border-radius: 12px; border:1px solid var(--border); background: rgba(5,6,10,.65); color: var(--text); width:100%}
+    .btn{color:var(--text); background: linear-gradient(135deg, rgba(124,58,237,.95), rgba(6,182,212,.75)); border:none; padding:8px 12px; border-radius: 12px; cursor:pointer;}
+    .grid{display:grid; grid-template-columns: 180px 1fr 1fr 120px; gap: 12px; align-items:end; margin-bottom: 14px}
+  </style>
+</head>
+<body>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header{padding:14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
+    .wrap{padding:18px;}
+    .card{margin-bottom: 14px;}
+    .small{color:var(--muted); font-size:.9em}
+    .grid{display:grid; grid-template-columns: 180px 1fr 1fr 120px; gap:12px; align-items:end}
+    pre{white-space:pre-wrap; word-break:break-word; margin:0;}
+    .pill{display:inline-block; padding:2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35);}
+  </style>
+
+  <header>
+    <div>
+      <strong>Dataset: {{ dataset.name }}</strong>
+      {% if dataset.description %}<span class="small"> — {{ dataset.description }}</span>{% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/runs">Runs</a> · <a href="/datasets">Datasets</a> · <a href="/scenarios">Scenario Runs</a> · <a href="/warnings">Warnings</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Add example</h3>
+      <form method="post" action="/datasets/{{ dataset.id }}/examples">
+        {{ csrf_input(request) | safe }}
+        <div class="grid">
+          <div>
+            <div class="small">App</div>
+            <select name="app_id">
+              <option value="app-A">app-A</option>
+              <option value="app-B">app-B</option>
+            </select>
+          </div>
+          <div>
+            <div class="small">Prompt</div>
+            <input name="prompt" placeholder="Summarize and include citations" />
+          </div>
+          <div>
+            <div class="small">Expected (optional)</div>
+            <input name="expected" placeholder="Expected behavior / acceptance criteria" />
+          </div>
+          <div>
+            <button class="btn" type="submit">Add</button>
+          </div>
+        </div>
+      </form>
+
+      <h3>Examples</h3>
+      <table>
+        <thead><tr><th>When</th><th>App</th><th>Input</th><th>Expected</th><th>Run now</th><th>Last output</th></tr></thead>
+        <tbody>
+          {% for ex in examples %}
+          <tr>
+            <td class="small">{{ ex.created_at }}</td>
+            <td class="small">{{ ex.app_id }}</td>
+            <td class="small">{{ ex.input_json }}</td>
+            <td class="small">{{ ex.expected_output_json }}</td>
+            <td>
+              <form method="post" action="/datasets/{{ dataset.id }}/examples/{{ ex.id }}/run">
+                {{ csrf_input(request) | safe }}
+                <button class="btn" type="submit">Run (Ollama)</button>
+              </form>
+              {% if ex.last_run_provider %}
+                <div class="small" style="margin-top:6px;">provider: <span class="pill">{{ ex.last_run_provider }}</span> · {{ ex.last_run_latency_ms or '' }} ms</div>
+              {% endif %}
+            </td>
+            <td class="small">
+              {% if ex.last_run_output_json %}
+                <pre>{{ ex.last_run_output_json }}</pre>
+              {% else %}
+                <span class="small">(not run yet)</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="small">Tip: "Run (Ollama)" will generate output (Ollama if reachable, else stub), record latency/provider, and create a TraceRun so you can inspect it in <a href="/runs">Runs</a>.</p>
+    </div>
+  </div>
+</body>
+</html>

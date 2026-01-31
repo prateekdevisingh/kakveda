@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kakveda - Playground</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    textarea { min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .pill{display:inline-block; padding:2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35);}
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Playground</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/scenarios">Scenarios</a> · <a href="/runs">Runs</a> · <a href="/datasets">Datasets</a> · <a href="/warnings">Warnings</a> · <a href="/eval">Eval</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Prompt playground</h3>
+      <p class="small">Run a one-off prompt against a selected model. Each run is stored as a TraceRun so you can open it in the Runs UI. Tip: load a versioned prompt from <a href="/prompts">Prompt Library</a>.</p>
+
+      <form method="post" action="/playground/run">
+        {{ csrf_input(request) | safe }}
+        <input type="hidden" name="prompt_version_id" value="{{ prompt_version_id or '' }}" />
+        <div class="row">
+          <div>
+            <div class="small">App</div>
+            <input name="app_id" value="{{ app_id }}" placeholder="app-A" style="width:140px" />
+          </div>
+          <div>
+            <div class="small">Agent</div>
+            <input name="agent_id" value="{{ agent_id }}" placeholder="playground" style="width:160px" />
+          </div>
+          <div>
+            <div class="small">Model</div>
+            <select name="model" style="min-width:240px">
+              {% for m in models %}
+                <option value="{{ m }}" {% if m == model %}selected{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <div class="small">Experiment</div>
+            <select name="experiment_id" style="min-width:220px">
+              <option value="">(none)</option>
+              {% for e in experiments %}
+                <option value="{{ e.id }}">{{ e.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <div class="small">Label</div>
+            <input name="experiment_label" value="" placeholder="v1" style="width:110px" />
+          </div>
+          <div>
+            <button class="btn" type="submit">Run</button>
+          </div>
+        </div>
+
+        <div style="margin-top:12px">
+          <div class="small">Prompt</div>
+          <textarea name="prompt" placeholder="Write a prompt...">{{ prompt }}</textarea>
+        </div>
+      </form>
+    </div>
+
+    {% if last %}
+    <div class="card" style="margin-top:14px">
+      <h3>Last run</h3>
+      <div class="small">Provider: <b>{{ last.provider }}</b> · Model: <b>{{ last.model }}</b> · Latency: <b>{{ last.latency_ms }}ms</b>
+        {% if last.run_id %} · <a href="/runs/{{ last.run_id }}">Open Run</a>{% endif %}
+      </div>
+      <pre style="white-space:pre-wrap; margin-top:10px">{{ last.output }}</pre>
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

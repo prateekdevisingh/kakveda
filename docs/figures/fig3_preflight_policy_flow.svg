@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <defs>
+    <style>
+      .title { font: 700 26px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #0f172a; }
+      .sub { font: 500 16px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #334155; }
+      .h { font: 700 16px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #0f172a; }
+      .t { font: 500 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #334155; }
+      .mono { font: 500 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; fill: #334155; }
+      .stroke { stroke: #1f2937; stroke-width: 2; }
+      .soft { stroke: #94a3b8; stroke-width: 2; }
+      .fillA { fill: #ecfeff; }
+      .fillB { fill: #eef2ff; }
+      .fillC { fill: #f0fdf4; }
+      .fillD { fill: #fff7ed; }
+      .fillE { fill: #f8fafc; }
+      .arrow { stroke: #0f172a; stroke-width: 2.5; fill: none; marker-end: url(#arrowHead); }
+      .arrowSoft { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrowHeadSoft); }
+      .dashed { stroke-dasharray: 8 6; }
+    </style>
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#0f172a" />
+    </marker>
+    <marker id="arrowHeadSoft" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="760" fill="#ffffff" />
+
+  <text x="40" y="55" class="title">Fig. 3 — Pre-flight matching and policy decision flow</text>
+  <text x="40" y="85" class="sub">Before calling the model, the system fingerprints the request, matches against failure memory, and applies a warning/block/routing policy.</text>
+
+  <!-- Steps -->
+  <g transform="translate(70,140)">
+    <rect x="0" y="0" width="360" height="90" rx="16" class="stroke fillE" />
+    <text x="20" y="38" class="h">(1) Incoming request</text>
+    <text x="20" y="64" class="t">prompt + tool schema + context + metadata</text>
+
+    <rect x="0" y="140" width="360" height="110" rx="16" class="stroke fillA" />
+    <text x="20" y="178" class="h">(2) Normalize + fingerprint</text>
+    <text x="20" y="203" class="t">canonicalize fields and compute signature</text>
+    <text x="20" y="228" class="mono">fingerprint = H(normalized_input)</text>
+
+    <rect x="0" y="300" width="360" height="110" rx="16" class="stroke fillB" />
+    <text x="20" y="338" class="h">(3) Lookup in GFKB</text>
+    <text x="20" y="363" class="t">exact / fuzzy match over recent failures</text>
+    <text x="20" y="388" class="t">retrieve failure + linked pattern metadata</text>
+
+    <path class="arrow" d="M180,90 L180,140" />
+    <path class="arrow" d="M180,250 L180,300" />
+  </g>
+
+  <!-- Decision -->
+  <g transform="translate(500,250)">
+    <rect x="0" y="0" width="320" height="180" rx="18" class="stroke fillD" />
+    <text x="20" y="44" class="h">(4) Policy decision</text>
+    <text x="20" y="74" class="t">Inputs: match score, severity, confidence</text>
+    <text x="20" y="98" class="t">Outputs: allow / warn / block / route</text>
+
+    <rect x="20" y="118" width="280" height="44" rx="12" class="soft fillE" />
+    <text x="32" y="146" class="mono">decision = f(match, severity, context)</text>
+  </g>
+
+  <!-- Outcomes -->
+  <g transform="translate(880,170)">
+    <rect x="0" y="0" width="260" height="90" rx="16" class="stroke fillC" />
+    <text x="20" y="38" class="h">(5a) Allow</text>
+    <text x="20" y="64" class="t">call model normally</text>
+
+    <rect x="0" y="130" width="260" height="110" rx="16" class="stroke fillB" />
+    <text x="20" y="168" class="h">(5b) Warn</text>
+    <text x="20" y="193" class="t">attach “failed before” warning</text>
+    <text x="20" y="218" class="t">optionally request confirmation</text>
+
+    <rect x="0" y="290" width="260" height="110" rx="16" class="stroke fillA" />
+    <text x="20" y="328" class="h">(5c) Block / Route</text>
+    <text x="20" y="353" class="t">prevent execution or route to safer path</text>
+    <text x="20" y="378" class="t">log policy event</text>
+  </g>
+
+  <!-- Arrows to decision -->
+  <path class="arrow" d="M430,440 C470,440 470,370 500,340" />
+  <path class="arrow" d="M430,370 C470,370 470,340 500,340" />
+
+  <!-- Decision to outcomes -->
+  <path class="arrow" d="M820,300 C860,230 860,215 880,215" />
+  <path class="arrow" d="M820,340 C860,340 860,335 880,335" />
+  <path class="arrow" d="M820,380 C860,460 860,455 880,455" />
+
+  <!-- Execution path -->
+  <g transform="translate(70,520)">
+    <rect x="0" y="0" width="1070" height="170" rx="18" class="soft fillE" />
+    <text x="20" y="42" class="h">Downstream execution (after pre-flight)</text>
+    <text x="20" y="70" class="t">• If allowed/warned: execute model → ingest trace → classify failures → update patterns → update health.</text>
+    <text x="20" y="96" class="t">• If blocked/routed: record policy event and optionally create a synthetic failure record for analytics.</text>
+
+    <rect x="20" y="115" width="590" height="40" rx="12" class="soft fillA" />
+    <text x="35" y="141" class="mono">policy_event = { fingerprint, decision, reason, timestamp }</text>
+  </g>
+
+  <!-- Side note about fuzzy matching -->
+  <g transform="translate(70,705)">
+    <text x="0" y="0" class="t" fill="#64748b">Note: Matching may be exact (hash/fingerprint) or approximate (rule-based similarity / embeddings) depending on configuration.</text>
+  </g>
+</svg>

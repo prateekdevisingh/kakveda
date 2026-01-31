@@ -1,0 +1,50 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-kakveda}
+      - POSTGRES_USER=${POSTGRES_USER:-kakveda}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  dashboard:
+    environment:
+      # Mark as production to enable guardrails.
+      - KAKVEDA_ENV=production
+
+      # Never commit real secrets. Provide via env/.env file.
+      - DASHBOARD_JWT_SECRET=${DASHBOARD_JWT_SECRET:?set-in-env}
+
+      # Use Postgres in production.
+      - DASHBOARD_DB_URL=${DASHBOARD_DB_URL:-postgresql+psycopg2://${POSTGRES_USER:-kakveda}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-kakveda}}
+
+      # Enable HA-safe revocation + distributed rate limiting.
+      - KAKVEDA_REDIS_URL=${KAKVEDA_REDIS_URL:-redis://redis:6379/0}
+
+      # Cookies should be secure behind HTTPS.
+      - DASHBOARD_COOKIE_SECURE=1
+      - DASHBOARD_COOKIE_SAMESITE=lax
+
+      # Optional: enable OpenTelemetry.
+      - KAKVEDA_OTEL_ENABLED=${KAKVEDA_OTEL_ENABLED:-0}
+      - OTEL_SERVICE_NAME=kakveda-dashboard
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+    depends_on:
+      - redis
+      - postgres
+
+volumes:
+  redis_data:
+  postgres_data:

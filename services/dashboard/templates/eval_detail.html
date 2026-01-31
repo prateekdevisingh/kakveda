@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eval {{ eval.id }}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div>
+  <a class="brand" href="/">kakveda</a>
+        <a class="nav" href="/scenarios">Scenarios</a>
+        <a class="nav" href="/warnings">Warnings</a>
+        <a class="nav" href="/runs">Runs</a>
+        <a class="nav" href="/datasets">Datasets</a>
+        <a class="nav active" href="/eval">Eval</a>
+      </div>
+      <div class="right">
+        <span class="badge">{{ email }}</span>
+        <span class="badge">role: {{ role }}</span>
+        <a class="nav" href="/logout">Logout</a>
+      </div>
+    </div>
+
+    <div class="container">
+      <h1 class="h1">Eval #{{ eval.id }}</h1>
+      <p class="muted">Dataset: {{ dataset.name if dataset else eval.dataset_id }}</p>
+
+      <div class="card">
+        <h2 class="h2">Summary</h2>
+        <div class="kv">
+          <div><span class="k">Total</span> <span class="v">{{ summary.get('total','?') }}</span></div>
+          <div><span class="k">Passed</span> <span class="v">{{ summary.get('passed','?') }}</span></div>
+          <div><span class="k">Pass rate</span> <span class="v">{{ '%.2f'|format(summary.get('pass_rate',0)) }}</span></div>
+        </div>
+
+        <div style="margin-top:10px" class="kv">
+          <div><span class="k">Latency p50</span> <span class="v">{{ summary.get('latency', {}).get('p50') or '—' }} ms</span></div>
+          <div><span class="k">Latency p95</span> <span class="v">{{ summary.get('latency', {}).get('p95') or '—' }} ms</span></div>
+          <div><span class="k">Latency min/max</span> <span class="v">{{ summary.get('latency', {}).get('min') or '—' }}/{{ summary.get('latency', {}).get('max') or '—' }} ms</span></div>
+          <div><span class="k">Providers</span>
+            <span class="v">
+              {% set prov = summary.get('providers', {}) %}
+              {% if prov and prov|length > 0 %}
+                {% for k,v in prov.items() %}{{ k }}: {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+              {% else %}
+                —
+              {% endif %}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="h2">Results</h2>
+        {% if rows|length == 0 %}
+          <p class="muted">No results.</p>
+        {% else %}
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Example</th>
+                <th>App</th>
+                <th>Passed</th>
+                <th>Score</th>
+                <th>Provider</th>
+                <th>Latency</th>
+                <th>Run</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in rows %}
+              {% set ex = examples.get(r.dataset_example_id) %}
+              {% set meta = row_meta.get(r.id) if row_meta else {} %}
+              <tr class="{% if r.passed %}ok{% else %}bad{% endif %}">
+                <td>
+                  <div><b>#{{ r.dataset_example_id }}</b></div>
+                  <div class="muted">{{ ex.input_json if ex else '' }}</div>
+                </td>
+                <td class="muted">{{ ex.app_id if ex else '' }}</td>
+                <td>{{ 'yes' if r.passed else 'no' }}</td>
+                <td>{{ r.score }}</td>
+                <td class="muted">{{ meta.get('provider') or '—' }}</td>
+                <td class="muted">{% if meta.get('latency_ms') %}{{ meta.get('latency_ms') }} ms{% else %}—{% endif %}</td>
+                <td><a href="/runs/{{ r.trace_run_id }}">{{ r.trace_run_id }}</a></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </div>
+
+      <p><a class="nav" href="/eval">← back</a></p>
+    </div>
+  </body>
+</html>

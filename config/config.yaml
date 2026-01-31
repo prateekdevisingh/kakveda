@@ -1,0 +1,26 @@
+failure_matching:
+  similarity_threshold: 0.8
+  mode: semantic_plus_rule
+
+warning_policy:
+  default_action: warn
+  patterns:
+    # Example (auto-created patterns will be referenced by pattern_id)
+    # FP-0042:
+    #   action: warn
+    #   notify: true
+
+health_score:
+  severity_weights:
+    low: 1
+    medium: 3
+    high: 7
+  window_size: 10
+  base_score: 100
+
+sampling:
+  enabled: false
+
+hot_reload:
+  enabled: true
+  poll_seconds: 2

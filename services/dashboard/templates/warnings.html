@@ -1,0 +1,703 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Warnings</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items:center; }
+    .wrap { padding: 18px; }
+    .small { color: var(--muted); font-size: 0.9em; }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border: 1px solid rgba(37,99,235,.35); }
+    .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-weight:600; border: 1px solid var(--border2); background: var(--bg); }
+    .b-warn { background: var(--warn); border:1px solid rgba(245,158,11,.35); }
+    .b-silent { background: var(--ok); border:1px solid rgba(34,197,94,.35); }
+    tr:target { outline: 2px solid rgba(37,99,235,.65); box-shadow: 0 0 0 6px rgba(37,99,235,.10); }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .kpi { display:flex; gap:18px; flex-wrap:wrap; }
+    .kpi .item { padding:10px 12px; border:1px solid var(--border); border-radius:12px; background: rgba(255,255,255,0.02); min-width: 180px; }
+    .kpi .label { margin:0; font-size:.82em; color: var(--muted); }
+    .kpi .value { margin:6px 0 0 0; font-size:1.2em; font-weight:700; }
+    .chartWrap { margin-top: 10px; }
+    .chartTitle { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .chartTitle h4 { margin: 0; }
+    .svgChart { width:100%; height:160px; border:1px solid var(--border); border-radius:12px; background: rgba(255,255,255,0.02); }
+    .legend { display:flex; gap:10px; flex-wrap:wrap; margin-top:8px; }
+    .legend .dot { width:10px; height:10px; border-radius:999px; display:inline-block; margin-right:6px; background: var(--primary); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .searchRow { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+    .hint { color: var(--muted); font-size: .85em; }
+    .filtersBar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:10px; flex-wrap:wrap; }
+    .chips { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .chip { display:inline-flex; gap:8px; align-items:center; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border2); background: rgba(255,255,255,0.03); font-size: 12px; }
+    .chip .k { color: var(--muted); }
+    .chip button { border:0; background: rgba(255,255,255,0.06); color: var(--text); border-radius: 999px; padding: 0 8px; cursor:pointer; line-height: 18px; }
+    .chip button:hover { background: rgba(255,255,255,0.12); }
+    .tooltip { position: fixed; pointer-events: none; z-index: 9999; background: rgba(17,26,46,0.98); border: 1px solid var(--border2); color: var(--text); padding: 8px 10px; border-radius: 10px; font-size: 12px; max-width: 340px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); display:none; }
+    .tooltip .k { color: var(--muted); }
+    @media (max-width: 980px){ .grid2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Warnings</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button type="submit" class="btn" style="padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/playground">Playground</a> · <a href="/warnings">Warnings</a> · <a href="/datasets">Datasets</a> · <a href="/prompts">Prompts</a> · <a href="/experiments">Experiments</a> · <a href="/projects">Projects</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="chartTitle">
+        <h3 style="margin:0">Analytics</h3>
+        <span class="small">Filters + range update instantly · charts are lightweight (no external JS)</span>
+      </div>
+
+      <div class="row" style="justify-content:space-between; margin-top:10px; gap:12px; flex-wrap:wrap;">
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <span class="small">Range</span>
+          <button type="button" class="btn secondary" data-range="7">7d</button>
+          <button type="button" class="btn secondary" data-range="30">30d</button>
+          <button type="button" class="btn secondary" data-range="90">90d</button>
+          <span class="small" id="rangeLabel" style="margin-left:8px;"></span>
+        </div>
+        <div class="searchRow">
+          <div style="min-width:260px; flex:1;">
+            <label class="small" for="filterSearch">Search</label>
+            <input id="filterSearch" class="input" placeholder="Filter apps/patterns/models (e.g. app-A, citation, llama)" style="padding:8px;" />
+            <div class="hint">Affects: app dropdown, top apps, top patterns, cost by app/model</div>
+          </div>
+        </div>
+        <div class="row" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
+          <div style="min-width:180px;">
+            <label class="small" for="filterApp">App</label>
+            <select id="filterApp" class="input" style="padding:8px;">
+              <option value="">All</option>
+            </select>
+          </div>
+          <div style="min-width:180px;">
+            <label class="small" for="filterAction">Action</label>
+            <select id="filterAction" class="input" style="padding:8px;">
+              <option value="">All</option>
+              <option value="warn">warn</option>
+              <option value="silent">silent</option>
+            </select>
+          </div>
+          <div style="min-width:200px;">
+            <label class="small" for="filterProvider">Provider</label>
+            <select id="filterProvider" class="input" style="padding:8px;">
+              <option value="">All</option>
+            </select>
+          </div>
+          <div style="min-width:240px;">
+            <label class="small" for="filterModel">Model</label>
+            <select id="filterModel" class="input" style="padding:8px;">
+              <option value="">All</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="filtersBar">
+        <div class="chips" id="activeChips">
+          <span class="small">Active filters:</span>
+          <span class="small" id="noFilters" style="display:none;">None</span>
+        </div>
+        <div>
+          <button type="button" class="btn secondary" id="btnClearFilters">Clear filters</button>
+        </div>
+      </div>
+
+      <div class="kpi" style="margin-top:10px;">
+        <div class="item">
+          <div class="label">Warnings (30d)</div>
+          <div class="value" id="kpiWarnings">{{ analytics.total_warnings_30d }}</div>
+        </div>
+        <div class="item">
+          <div class="label">Apps (active)</div>
+          <div class="value" id="kpiApps">{{ analytics.apps_active_30d }}</div>
+        </div>
+        <div class="item">
+          <div class="label">Cost impact (30d)</div>
+          <div class="value" id="kpiCost">${{ '%.4f'|format(analytics.total_cost_usd_30d) }}</div>
+          <div class="small">Run cost attributed to apps by `TraceRun.app_id`</div>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:14px;">
+        <div>
+          <div class="chartTitle"><h4>Warnings over time</h4><span class="small mono">daily</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartWarnings"></svg>
+            <div class="legend"><span><span class="dot"></span><span class="small">Warnings/day</span></span></div>
+          </div>
+        </div>
+        <div>
+          <div class="chartTitle"><h4>Cost impact by app (30d)</h4><span class="small mono">USD</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartCost"></svg>
+            <div class="small">Top apps by total cost (based on runs). Handy to spot where spend is concentrated.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:16px;">
+        <div>
+          <div class="chartTitle"><h4>Warnings (stacked) · warn vs silent</h4><span class="small mono">daily</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartStacked"></svg>
+            <div class="legend">
+              <span><span class="dot" style="background:#f59e0b"></span><span class="small">warn</span></span>
+              <span><span class="dot" style="background:#22c55e"></span><span class="small">silent</span></span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="chartTitle"><h4>Model cost share (30d)</h4><span class="small mono">USD</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartCostByModel"></svg>
+            <div class="small">Top models by total cost (filtered by provider/model/app selection).</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:16px;">
+        <div>
+          <div class="chartTitle"><h4>Top apps by warnings (30d)</h4><span class="small mono">count</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartTopApps"></svg>
+          </div>
+        </div>
+        <div>
+          <div class="chartTitle"><h4>Top patterns (30d)</h4><span class="small mono">count</span></div>
+          <div class="chartWrap">
+            <svg class="svgChart" viewBox="0 0 600 160" preserveAspectRatio="none" id="chartTopPatterns"></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Latest warnings</h3>
+      <table>
+        <thead><tr><th>When</th><th>App</th><th>Action</th><th>Confidence</th><th>Pattern</th><th>Prompt</th><th>Message</th></tr></thead>
+        <tbody>
+          {% for w in warnings %}
+          <tr id="w-{{ w.id }}">
+            <td class="small">{{ w.ts }}</td>
+            <td><span class="pill">{{ w.app_id }}</span></td>
+            <td>
+              {% if w.action == 'warn' %}
+                <span class="badge b-warn">warn</span>
+              {% else %}
+                <span class="badge b-silent">{{ w.action }}</span>
+              {% endif %}
+            </td>
+            <td>{{ w.confidence }}</td>
+            <td class="small">{{ w.pattern_id or '' }}</td>
+            <td class="small" title="{{ w.prompt or '' }}">{{ (w.prompt or '')[:100] }}{% if w.prompt and (w.prompt|length) > 100 %}…{% endif %}</td>
+            <td>{{ w.message }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="small">These are collected by the dashboard when you run scenarios through the UI, not by scraping other services.</p>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tt"></div>
+
+  <script>
+    const analytics = {{ analytics | tojson }};
+    const warningsRows = {{ warnings_rows | tojson }};
+    const runsRows = {{ runs_rows | tojson }};
+
+    function el(id){ return document.getElementById(id); }
+    function clearSvg(svg){ while (svg.firstChild) svg.removeChild(svg.firstChild); }
+    function svgEl(tag, attrs){
+      const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [k,v] of Object.entries(attrs || {})) n.setAttribute(k, String(v));
+      return n;
+    }
+
+    // Tooltip helpers
+    const tt = el('tt');
+    function showTT(html, x, y){
+      if (!tt) return;
+      tt.innerHTML = html;
+      tt.style.display = 'block';
+      const pad = 12;
+      const rectW = tt.offsetWidth || 260;
+      const rectH = tt.offsetHeight || 44;
+      let left = x + pad;
+      let top = y + pad;
+      if (left + rectW > window.innerWidth - 8) left = x - rectW - pad;
+      if (top + rectH > window.innerHeight - 8) top = y - rectH - pad;
+      tt.style.left = left + 'px';
+      tt.style.top = top + 'px';
+    }
+    function hideTT(){ if (tt) tt.style.display = 'none'; }
+
+    function renderLine(svg, points, opts){
+      if (!svg) return;
+      clearSvg(svg);
+      const w = 600, h = 160;
+      const padL = 42, padR = 10, padT = 12, padB = 26;
+      const innerW = w - padL - padR;
+      const innerH = h - padT - padB;
+      const vals = (points || []).map(p => Number(p.value || 0));
+      const maxV = Math.max(1, ...vals);
+      const minV = 0;
+      const n = Math.max(1, points.length);
+
+      // grid
+      svg.appendChild(svgEl('rect', {x:0,y:0,width:w,height:h,fill:'transparent'}));
+      for (let i=0;i<=4;i++){
+        const y = padT + (innerH * i/4);
+        svg.appendChild(svgEl('line', {x1:padL,y1:y,x2:w-padR,y2:y,stroke:'rgba(255,255,255,0.06)'}));
+      }
+      svg.appendChild(svgEl('line', {x1:padL,y1:padT+innerH,x2:w-padR,y2:padT+innerH,stroke:'rgba(255,255,255,0.10)'}));
+      svg.appendChild(svgEl('line', {x1:padL,y1:padT,x2:padL,y2:padT+innerH,stroke:'rgba(255,255,255,0.10)'}));
+
+      // y labels
+      for (let i=0;i<=4;i++){
+        const v = Math.round(maxV * (1 - i/4));
+        const y = padT + (innerH * i/4);
+        const t = svgEl('text', {x:padL-8,y:y+4,fill:'#9aa8bf','font-size':'11','text-anchor':'end'});
+        t.textContent = String(v);
+        svg.appendChild(t);
+      }
+
+      // path
+      let d = '';
+      for (let i=0;i<points.length;i++){
+        const x = padL + (innerW * (points.length === 1 ? 0 : (i/(points.length-1))));
+        const v = Number(points[i].value || 0);
+        const y = padT + innerH - ((v-minV)/(maxV-minV)) * innerH;
+        d += (i===0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2);
+      }
+      const stroke = (opts && opts.stroke) || '#2563eb';
+      const fill = (opts && opts.fill) || 'rgba(37,99,235,0.18)';
+
+      // area fill
+      if (points.length >= 2){
+        const dArea = d + ` L ${padL+innerW},${padT+innerH} L ${padL},${padT+innerH} Z`;
+        svg.appendChild(svgEl('path', {d:dArea, fill:fill, stroke:'none'}));
+      }
+      svg.appendChild(svgEl('path', {d, fill:'none', stroke, 'stroke-width':'2.5'}));
+
+      // x labels (start/mid/end)
+      const labelIdx = points.length <= 3 ? points.map((_,i)=>i) : [0, Math.floor((points.length-1)/2), points.length-1];
+      for (const idx of labelIdx){
+        const x = padL + (innerW * (points.length === 1 ? 0 : (idx/(points.length-1))));
+        const t = svgEl('text', {x, y:h-8, fill:'#9aa8bf','font-size':'11','text-anchor':'middle'});
+        t.textContent = String(points[idx].label || '');
+        svg.appendChild(t);
+      }
+    }
+
+    function renderBars(svg, items, opts){
+      if (!svg) return;
+      clearSvg(svg);
+      const w = 600, h = 160;
+      const padL = 140, padR = 18, padT = 12, padB = 18;
+      const innerW = w - padL - padR;
+      const innerH = h - padT - padB;
+
+      const rows = (items || []).slice(0, (opts && opts.maxItems) || 8);
+      const vals = rows.map(r => Number(r.value || 0));
+      const maxV = Math.max(1e-9, ...vals);
+
+      // axis
+      svg.appendChild(svgEl('rect', {x:0,y:0,width:w,height:h,fill:'transparent'}));
+      svg.appendChild(svgEl('line', {x1:padL,y1:padT,x2:padL,y2:padT+innerH,stroke:'rgba(255,255,255,0.10)'}));
+
+      const barH = innerH / Math.max(1, rows.length);
+      for (let i=0;i<rows.length;i++){
+        const r = rows[i];
+        const y = padT + i*barH + barH*0.2;
+        const bh = barH*0.6;
+        const vv = Number(r.value || 0);
+        const bw = innerW * (vv / maxV);
+        const color = (opts && opts.color) || '#2563eb';
+        const labelStr = String(r.label || '');
+        const rawVal = Number(r.value || 0);
+        const displayVal = (opts && opts.format) ? opts.format(rawVal) : String(rawVal);
+        const rect = svgEl('rect', {x:padL, y, width:Math.max(1,bw), height:bh, fill:color, rx:6, ry:6, opacity:'0.85'});
+        rect.addEventListener('mousemove', (ev) => {
+          showTT(`<div><span class="k">${(opts && opts.tooltipLabel) || 'Item'}:</span> <b>${labelStr}</b></div><div><span class="k">Value:</span> <b>${displayVal}</b></div>`, ev.clientX, ev.clientY);
+        });
+        rect.addEventListener('mouseleave', hideTT);
+        svg.appendChild(rect);
+
+        const label = svgEl('text', {x:padL-10, y:y+bh*0.72, fill:'#e6edf3','font-size':'12','text-anchor':'end'});
+        label.textContent = String(r.label || '');
+        svg.appendChild(label);
+
+        const valText = svgEl('text', {x:padL+Math.max(1,bw)+6, y:y+bh*0.72, fill:'#9aa8bf','font-size':'12','text-anchor':'start'});
+        valText.textContent = displayVal;
+        svg.appendChild(valText);
+      }
+    }
+
+    function renderStackedDaily(svg, days, warnCounts, silentCounts){
+      if (!svg) return;
+      clearSvg(svg);
+      const w = 600, h = 160;
+      const padL = 42, padR = 10, padT = 12, padB = 26;
+      const innerW = w - padL - padR;
+      const innerH = h - padT - padB;
+
+      const maxV = Math.max(1, ...days.map(d => Number((warnCounts[d]||0) + (silentCounts[d]||0))));
+
+      // grid
+      svg.appendChild(svgEl('rect', {x:0,y:0,width:w,height:h,fill:'transparent'}));
+      for (let i=0;i<=4;i++){
+        const y = padT + (innerH * i/4);
+        svg.appendChild(svgEl('line', {x1:padL,y1:y,x2:w-padR,y2:y,stroke:'rgba(255,255,255,0.06)'}));
+      }
+      svg.appendChild(svgEl('line', {x1:padL,y1:padT+innerH,x2:w-padR,y2:padT+innerH,stroke:'rgba(255,255,255,0.10)'}));
+      svg.appendChild(svgEl('line', {x1:padL,y1:padT,x2:padL,y2:padT+innerH,stroke:'rgba(255,255,255,0.10)'}));
+
+      // y labels
+      for (let i=0;i<=4;i++){
+        const v = Math.round(maxV * (1 - i/4));
+        const y = padT + (innerH * i/4);
+        const t = svgEl('text', {x:padL-8,y:y+4,fill:'#9aa8bf','font-size':'11','text-anchor':'end'});
+        t.textContent = String(v);
+        svg.appendChild(t);
+      }
+
+      const barGap = 3;
+      const barW = Math.max(2, (innerW / Math.max(1, days.length)) - barGap);
+      for (let i=0;i<days.length;i++){
+        const d = days[i];
+        const wv = Number(warnCounts[d] || 0);
+        const sv = Number(silentCounts[d] || 0);
+        const total = wv + sv;
+        const x = padL + i*(barW+barGap);
+        const totH = innerH * (total / maxV);
+        const warnH = total ? (totH * (wv/total)) : 0;
+        const silentH = totH - warnH;
+        const yBase = padT + innerH;
+
+        // silent (bottom)
+        if (silentH > 0.5){
+          const sRect = svgEl('rect', {x, y:yBase - silentH, width:barW, height:silentH, fill:'#22c55e', opacity:'0.75', rx:2, ry:2});
+          sRect.addEventListener('mousemove', (ev) => {
+            showTT(`<div><b>${String(d).slice(0,10)}</b></div><div><span class="k">silent:</span> <b>${sv}</b></div><div><span class="k">warn:</span> <b>${wv}</b></div><div><span class="k">total:</span> <b>${total}</b></div>`, ev.clientX, ev.clientY);
+          });
+          sRect.addEventListener('mouseleave', hideTT);
+          svg.appendChild(sRect);
+        }
+        // warn (top)
+        if (warnH > 0.5){
+          const wRect = svgEl('rect', {x, y:yBase - silentH - warnH, width:barW, height:warnH, fill:'#f59e0b', opacity:'0.82', rx:2, ry:2});
+          wRect.addEventListener('mousemove', (ev) => {
+            showTT(`<div><b>${String(d).slice(0,10)}</b></div><div><span class="k">warn:</span> <b>${wv}</b></div><div><span class="k">silent:</span> <b>${sv}</b></div><div><span class="k">total:</span> <b>${total}</b></div>`, ev.clientX, ev.clientY);
+          });
+          wRect.addEventListener('mouseleave', hideTT);
+          svg.appendChild(wRect);
+        }
+      }
+
+      // x labels (start/mid/end)
+      const labelIdx = days.length <= 3 ? days.map((_,i)=>i) : [0, Math.floor((days.length-1)/2), days.length-1];
+      for (const idx of labelIdx){
+        const d = days[idx];
+        const x = padL + idx*(barW+barGap) + barW/2;
+        const t = svgEl('text', {x, y:h-8, fill:'#9aa8bf','font-size':'11','text-anchor':'middle'});
+        t.textContent = String(d).slice(5);
+        svg.appendChild(t);
+      }
+    }
+
+    function fmtUsd(v){
+      if (!isFinite(v)) return '$0.0000';
+      return '$' + Number(v).toFixed(4);
+    }
+
+    function uniq(arr){ return Array.from(new Set(arr)); }
+    function isoDay(ts){
+      // ts like "2026-01-30T..." or "2026-01-30 ..."
+      const s = String(ts || '');
+      if (s.length >= 10) return s.slice(0,10);
+      return '';
+    }
+
+    function buildDays(rangeDays){
+      // Build list of ISO days (ascending) for the last N days, inclusive of today.
+      const now = new Date();
+      const days = [];
+      for (let i=rangeDays-1; i>=0; i--){
+        const d = new Date(now.getTime() - i*24*3600*1000);
+        const iso = d.toISOString().slice(0,10);
+        days.push(iso);
+      }
+      return days;
+    }
+
+    // UI state for instant filtering (single source of truth)
+    const state = {
+      rangeDays: 30,
+      search: '',
+      app: '',
+      action: '',
+      provider: '',
+      model: '',
+    };
+
+  function compute(rangeDays, appFilter, actionFilter){
+      const days = buildDays(rangeDays);
+      const daySet = new Set(days);
+
+      const wf = warningsRows.filter(w => {
+        const d = isoDay(w.ts);
+        if (!daySet.has(d)) return false;
+        if (appFilter && String(w.app_id) !== String(appFilter)) return false;
+        if (actionFilter && String(w.action) !== String(actionFilter)) return false;
+        if (state.search) {
+          const s = state.search;
+          const hit = String(w.app_id||'').toLowerCase().includes(s)
+            || String(w.pattern_id||'').toLowerCase().includes(s)
+            || String(w.action||'').toLowerCase().includes(s);
+          if (!hit) return false;
+        }
+        return true;
+      });
+
+      const rf = runsRows.filter(r => {
+        const d = isoDay(r.ts);
+        if (!daySet.has(d)) return false;
+        if (appFilter && String(r.app_id) !== String(appFilter)) return false;
+        if (state.provider && String(r.provider || '') !== String(state.provider)) return false;
+        if (state.model && String(r.model || '') !== String(state.model)) return false;
+        if (state.search) {
+          const s = state.search;
+          const hit = String(r.app_id||'').toLowerCase().includes(s)
+            || String(r.provider||'').toLowerCase().includes(s)
+            || String(r.model||'').toLowerCase().includes(s);
+          if (!hit) return false;
+        }
+        return true;
+      });
+
+      const dayCounts = {};
+      const dayWarn = {};
+      const daySilent = {};
+      for (const w of wf){
+        const d = isoDay(w.ts);
+        dayCounts[d] = (dayCounts[d] || 0) + 1;
+        if (String(w.action) === 'warn') dayWarn[d] = (dayWarn[d] || 0) + 1;
+        if (String(w.action) === 'silent') daySilent[d] = (daySilent[d] || 0) + 1;
+      }
+      const warnings_by_day = days.map(d => ({label: d.slice(5), value: Number(dayCounts[d] || 0)}));
+
+      const appCounts = {};
+      const patternCounts = {};
+      for (const w of wf){
+        const a = String(w.app_id || 'unknown');
+        appCounts[a] = (appCounts[a] || 0) + 1;
+        const p = String(w.pattern_id || '(none)');
+        patternCounts[p] = (patternCounts[p] || 0) + 1;
+      }
+      const warnings_by_app = Object.entries(appCounts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:k,value:v}));
+      const warnings_by_pattern = Object.entries(patternCounts).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:k,value:v}));
+
+      const costByApp = {};
+      let totalCost = 0;
+      const costByModel = {};
+      for (const r of rf){
+        const a = String(r.app_id || 'unknown');
+        const usd = Number(r.cost_usd || 0);
+        totalCost += usd;
+        costByApp[a] = (costByApp[a] || 0) + usd;
+
+        const m = String(r.model || '(unknown)');
+        costByModel[m] = (costByModel[m] || 0) + usd;
+      }
+      const cost_by_app = Object.entries(costByApp).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:k,value:Number(v)}));
+      const cost_by_model = Object.entries(costByModel).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({label:k,value:Number(v)}));
+
+      const apps_active = uniq(wf.map(w=>String(w.app_id || 'unknown'))).length;
+      return {
+        total_warnings: wf.length,
+        apps_active,
+        total_cost_usd: totalCost,
+        warnings_by_day,
+        warnings_by_app,
+        warnings_by_pattern,
+        cost_by_app,
+        cost_by_model,
+        days,
+        dayWarn,
+        daySilent,
+      };
+    }
+
+
+    function setRange(days){
+      state.rangeDays = Number(days || 30);
+      for (const b of document.querySelectorAll('button[data-range]')){
+        b.classList.toggle('primary', String(b.dataset.range) === String(state.rangeDays));
+      }
+      const rl = el('rangeLabel');
+      if (rl) rl.textContent = `last ${state.rangeDays} days`;
+      renderAll();
+    }
+
+    function renderChips(){
+      const host = el('activeChips');
+      const empty = el('noFilters');
+      if (!host) return;
+      // remove old chips (keep first label + empty placeholder)
+      const keepIds = new Set(['noFilters']);
+      const kids = Array.from(host.children);
+      for (const node of kids){
+        if (node.id === 'noFilters') continue;
+        if (node.tagName && node.tagName.toLowerCase() === 'span' && node.classList.contains('small')) continue;
+        if (node.dataset && node.dataset.chip === '1') host.removeChild(node);
+      }
+
+      function addChip(key, label, val, onClear){
+        if (!val) return;
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.dataset.chip = '1';
+        chip.innerHTML = `<span class="k">${label}:</span> <span class="mono">${String(val)}</span>`;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.title = 'Remove filter';
+        btn.textContent = '×';
+        btn.addEventListener('click', onClear);
+        chip.appendChild(btn);
+        host.appendChild(chip);
+      }
+
+      addChip('range', 'range', `${state.rangeDays}d`, () => setRange(30));
+      addChip('search', 'search', state.search, () => { state.search=''; const i=el('filterSearch'); if(i) i.value=''; renderAll(); });
+      addChip('app', 'app', state.app, () => { state.app=''; const s=el('filterApp'); if(s) s.value=''; renderAll(); });
+      addChip('action', 'action', state.action, () => { state.action=''; const s=el('filterAction'); if(s) s.value=''; renderAll(); });
+      addChip('provider', 'provider', state.provider, () => { state.provider=''; const s=el('filterProvider'); if(s) s.value=''; renderAll(); });
+      addChip('model', 'model', state.model, () => { state.model=''; const s=el('filterModel'); if(s) s.value=''; renderAll(); });
+
+      const any = Boolean(state.search || state.app || state.action || state.provider || state.model || (state.rangeDays !== 30));
+      if (empty) empty.style.display = any ? 'none' : 'inline';
+      const btn = el('btnClearFilters');
+      if (btn) btn.disabled = !any;
+    }
+
+    function clearAllFilters(){
+      state.search = '';
+      state.app = '';
+      state.action = '';
+      state.provider = '';
+      state.model = '';
+      const i = el('filterSearch'); if (i) i.value = '';
+      const a = el('filterApp'); if (a) a.value = '';
+      const ac = el('filterAction'); if (ac) ac.value = '';
+      const p = el('filterProvider'); if (p) p.value = '';
+      const m = el('filterModel'); if (m) m.value = '';
+      setRange(30);
+      renderAll();
+    }
+
+    function renderAll(){
+      // Pull latest values from controls (single source of truth is state)
+      const appSel = el('filterApp');
+      const actSel = el('filterAction');
+      const provSel = el('filterProvider');
+      const modelSel = el('filterModel');
+      if (appSel) state.app = appSel.value || '';
+      if (actSel) state.action = actSel.value || '';
+      if (provSel) state.provider = provSel.value || '';
+      if (modelSel) state.model = modelSel.value || '';
+
+      const c = compute(state.rangeDays, state.app, state.action);
+
+      // KPIs
+      const kW = el('kpiWarnings'); if (kW) kW.textContent = String(c.total_warnings);
+      const kA = el('kpiApps'); if (kA) kA.textContent = String(c.apps_active);
+      const kC = el('kpiCost'); if (kC) kC.textContent = fmtUsd(c.total_cost_usd);
+
+      // Charts
+      renderLine(el('chartWarnings'), c.warnings_by_day, {stroke:'#2563eb', fill:'rgba(37,99,235,0.18)'});
+      renderBars(el('chartCost'), c.cost_by_app, {color:'#a78bfa', format:fmtUsd, tooltipLabel:'App'});
+      renderStackedDaily(el('chartStacked'), c.days, c.dayWarn, c.daySilent);
+      renderBars(el('chartTopApps'), c.warnings_by_app, {color:'#38bdf8', format:(v)=>String(Math.round(v)), tooltipLabel:'App'});
+      renderBars(el('chartTopPatterns'), c.warnings_by_pattern, {color:'#f472b6', format:(v)=>String(Math.round(v)), tooltipLabel:'Pattern'});
+      renderBars(el('chartCostByModel'), c.cost_by_model, {color:'#fb7185', format:fmtUsd, tooltipLabel:'Model'});
+
+      renderChips();
+    }
+
+  function debounce(fn, ms){ let t=null; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); }; }
+
+    function repopulateAppDropdown(){
+      const sel = el('filterApp');
+      if (!sel) return;
+      const prev = sel.value || '';
+      // options based on warnings + runs (so cost charts match)
+      const apps = uniq([...warningsRows.map(w=>String(w.app_id||'')), ...runsRows.map(r=>String(r.app_id||''))].filter(Boolean));
+      const s = String(state.search || '').trim().toLowerCase();
+      const filtered = s ? apps.filter(a => a.toLowerCase().includes(s)) : apps;
+      sel.innerHTML = '<option value="">All</option>' + filtered.sort().map(a => `<option value="${a}">${a}</option>`).join('');
+      if (prev && filtered.includes(prev)) sel.value = prev;
+      else sel.value = '';
+    }
+
+    function repopulateProviderModel(){
+      const pSel = el('filterProvider');
+      const mSel = el('filterModel');
+      if (!pSel || !mSel) return;
+      const prevP = pSel.value || '';
+      const prevM = mSel.value || '';
+      const providers = uniq(runsRows.map(r=>String(r.provider||'')).filter(Boolean)).sort();
+      const models = uniq(runsRows.map(r=>String(r.model||'')).filter(Boolean)).sort();
+      pSel.innerHTML = '<option value="">All</option>' + providers.map(p => `<option value="${p}">${p}</option>`).join('');
+      mSel.innerHTML = '<option value="">All</option>' + models.map(m => `<option value="${m}">${m}</option>`).join('');
+      if (prevP && providers.includes(prevP)) pSel.value = prevP;
+      if (prevM && models.includes(prevM)) mSel.value = prevM;
+    }
+
+    // Wire events
+    for (const b of document.querySelectorAll('button[data-range]')){
+      b.addEventListener('click', () => setRange(b.dataset.range));
+    }
+    const btnClear = el('btnClearFilters');
+    if (btnClear) btnClear.addEventListener('click', clearAllFilters);
+
+    const onSearch = debounce(() => {
+      state.search = String(el('filterSearch')?.value || '').trim().toLowerCase();
+      repopulateAppDropdown();
+      renderAll();
+    }, 120);
+    const sIn = el('filterSearch');
+    if (sIn) sIn.addEventListener('input', onSearch);
+
+    const fApp = el('filterApp'); if (fApp) fApp.addEventListener('change', renderAll);
+    const fAct = el('filterAction'); if (fAct) fAct.addEventListener('change', renderAll);
+    const fProv = el('filterProvider'); if (fProv) fProv.addEventListener('change', renderAll);
+    const fModel = el('filterModel'); if (fModel) fModel.addEventListener('change', renderAll);
+
+    // Initial paint
+    repopulateProviderModel();
+    repopulateAppDropdown();
+    setRange(30);
+    renderAll();
+  </script>
+</body>
+</html>

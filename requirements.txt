@@ -1,0 +1,24 @@
+fastapi==0.115.6
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.6.1
+pyyaml==6.0.2
+httpx==0.27.2
+numpy==2.1.3
+scikit-learn==1.5.2
+pytest==8.3.3
+
+# Production toggles (optional)
+redis==5.0.1
+psycopg2-binary==2.9.9
+opentelemetry-api==1.28.2
+opentelemetry-sdk==1.28.2
+opentelemetry-instrumentation-fastapi==0.49b2
+opentelemetry-exporter-otlp==1.28.2
+
+# Dashboard + Auth
+jinja2==3.1.4
+python-multipart==0.0.9
+passlib[bcrypt]==1.7.4
+pyjwt==2.10.1
+sqlalchemy==2.0.36

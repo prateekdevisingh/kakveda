@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Experiment {{ experiment.name }}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <div>
+          <a class="btn secondary" href="/">Home</a>
+          <a class="btn secondary" href="/experiments">Experiments</a>
+          <a class="btn secondary" href="/runs">Runs</a>
+          <a class="btn secondary" href="/prompts">Prompts</a>
+        </div>
+        <div>
+          <a class="btn secondary" href="/auth/logout">Logout</a>
+        </div>
+      </div>
+
+      <h1>Experiment: {{ experiment.name }}</h1>
+      {% if experiment.description %}
+      <p class="muted">{{ experiment.description }}</p>
+      {% endif %}
+
+      <div class="grid3" style="margin-top: 12px">
+        <div class="card">
+          <h3>Total runs</h3>
+          <div style="font-size: 28px; font-weight: 700">{{ scorecards.total_runs }}</div>
+        </div>
+        <div class="card">
+          <h3>Latency p50 / p95</h3>
+          <div style="font-size: 20px; font-weight: 700">{{ scorecards.p50_ms }}ms / {{ scorecards.p95_ms }}ms</div>
+        </div>
+        <div class="card">
+          <h3>Provider split</h3>
+          <div>
+            {% for k,v in scorecards.provider_split.items() %}
+              <div><span class="pill">{{ k }}</span> {{ v }}</div>
+            {% endfor %}
+            {% if not scorecards.provider_split %}
+              <div class="muted">n/a</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 12px">
+        <h3>Add a run to this experiment</h3>
+        <form method="post" action="/experiments/{{ experiment.id }}/add_run">
+          {{ csrf_input(request) | safe }}
+          <div class="grid3">
+            <div>
+              <label>Run ID</label>
+              <input name="run_id" placeholder="e.g. 42" required />
+            </div>
+            <div>
+              <label>Label (optional)</label>
+              <input name="label" placeholder="e.g. v1" />
+            </div>
+            <div>
+              <label>Prompt version ID (optional)</label>
+              <input name="prompt_version_id" placeholder="e.g. 7" />
+            </div>
+          </div>
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <p class="muted" style="margin-top: 8px">Tip: create runs via <a href="/playground">Playground</a> and then attach them here for comparison.</p>
+      </div>
+
+      <div class="card" style="margin-top: 12px">
+        <h3>Runs in this experiment</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Label</th>
+              <th>App</th>
+              <th>Agent</th>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Latency</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in runs %}
+            <tr>
+              <td><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+              <td>{{ r._exp_label or '' }}</td>
+              <td>{{ r.app_id }}</td>
+              <td>{{ r.agent_id }}</td>
+              <td>{{ r.provider or '' }}</td>
+              <td>{{ r.model or '' }}</td>
+              <td>{{ r.duration_ms or '' }}</td>
+              <td><a class="btn secondary" href="/runs/{{ r.id }}">Open</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if not runs %}
+        <p class="muted">No runs yet. Add one above.</p>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

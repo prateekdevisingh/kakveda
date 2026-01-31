@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <defs>
+    <style>
+      .title { font: 700 26px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #0f172a; }
+      .sub { font: 500 16px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #334155; }
+      .boxTitle { font: 700 16px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #0f172a; }
+      .boxText { font: 500 13px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #334155; }
+      .chip { font: 600 12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; fill: #0f172a; }
+      .stroke { stroke: #1f2937; stroke-width: 2; }
+      .soft { stroke: #94a3b8; stroke-width: 2; }
+      .fillA { fill: #ecfeff; }
+      .fillB { fill: #eef2ff; }
+      .fillC { fill: #f0fdf4; }
+      .fillD { fill: #fff7ed; }
+      .fillE { fill: #f8fafc; }
+      .arrow { stroke: #0f172a; stroke-width: 2.5; fill: none; marker-end: url(#arrowHead); }
+      .arrowSoft { stroke: #64748b; stroke-width: 2.5; fill: none; marker-end: url(#arrowHeadSoft); }
+      .dashed { stroke-dasharray: 8 6; }
+    </style>
+
+    <marker id="arrowHead" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#0f172a" />
+    </marker>
+    <marker id="arrowHeadSoft" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="760" fill="#ffffff" />
+
+  <text x="40" y="55" class="title">Fig. 1 — Pipeline-centric architecture for failure-intelligence</text>
+  <text x="40" y="85" class="sub">A request/run flows through policy → model → ingestion → event bus → classification → knowledge base → patterns → health, while the dashboard triggers and visualizes.</text>
+
+  <!-- Left vertical pipeline -->
+  <g transform="translate(70,135)">
+    <rect x="0" y="0" width="260" height="70" rx="14" class="stroke fillE" />
+    <text x="20" y="30" class="boxTitle">Scenario Runner</text>
+    <text x="20" y="52" class="boxText">Starts a run (scenario) and captures inputs</text>
+
+    <rect x="0" y="105" width="260" height="70" rx="14" class="stroke fillD" />
+    <text x="20" y="135" class="boxTitle">Warning Policy</text>
+    <text x="20" y="157" class="boxText">Pre-flight: checks “failed before?”</text>
+
+    <rect x="0" y="210" width="260" height="70" rx="14" class="stroke fillB" />
+    <text x="20" y="240" class="boxTitle">Model Runtime</text>
+    <text x="20" y="262" class="boxText">Ollama or deterministic stub</text>
+
+    <rect x="0" y="315" width="260" height="70" rx="14" class="stroke fillA" />
+    <text x="20" y="345" class="boxTitle">Trace Ingestion</text>
+    <text x="20" y="367" class="boxText">Collects spans, errors, metadata</text>
+
+    <rect x="0" y="420" width="260" height="70" rx="14" class="stroke fillE" />
+    <text x="20" y="450" class="boxTitle">Event Bus (Demo)</text>
+    <text x="20" y="472" class="boxText">Publishes “trace_ingested” events</text>
+
+    <path class="arrow" d="M130,70 L130,105" />
+    <path class="arrow" d="M130,175 L130,210" />
+    <path class="arrow" d="M130,280 L130,315" />
+    <path class="arrow" d="M130,385 L130,420" />
+  </g>
+
+  <!-- Right processing services -->
+  <g transform="translate(430,170)">
+    <rect x="0" y="0" width="330" height="80" rx="16" class="stroke fillC" />
+    <text x="20" y="32" class="boxTitle">Failure Classifier</text>
+    <text x="20" y="56" class="boxText">Extracts failure events from traces</text>
+
+    <rect x="0" y="120" width="330" height="100" rx="16" class="stroke fillE" />
+    <text x="20" y="154" class="boxTitle">Global Failure Knowledge Base (GFKB)</text>
+    <text x="20" y="178" class="boxText">Stores failures + versions + metadata</text>
+    <text x="20" y="200" class="boxText">Also stores patterns &amp; links</text>
+
+    <rect x="0" y="255" width="330" height="80" rx="16" class="stroke fillB" />
+    <text x="20" y="287" class="boxTitle">Pattern Detector</text>
+    <text x="20" y="311" class="boxText">Finds recurring patterns across runs</text>
+
+    <rect x="0" y="375" width="330" height="80" rx="16" class="stroke fillD" />
+    <text x="20" y="407" class="boxTitle">Health Scoring</text>
+    <text x="20" y="431" class="boxText">Computes timeline &amp; overall score</text>
+
+    <path class="arrow" d="M165,80 L165,120" />
+    <path class="arrow" d="M165,220 L165,255" />
+    <path class="arrow" d="M165,335 L165,375" />
+  </g>
+
+  <!-- Dashboard box -->
+  <g transform="translate(820,265)">
+    <rect x="0" y="0" width="320" height="200" rx="18" class="stroke fillE" />
+    <text x="20" y="40" class="boxTitle">Dashboard</text>
+    <text x="20" y="68" class="boxText">UI + Auth/RBAC</text>
+    <text x="20" y="90" class="boxText">Scenario runner entrypoint</text>
+    <text x="20" y="112" class="boxText">Warnings, runs, traces, metrics</text>
+    <text x="20" y="134" class="boxText">Datasets, evals, prompts, experiments</text>
+
+    <rect x="20" y="155" width="280" height="30" rx="10" class="soft fillA" />
+    <text x="35" y="176" class="chip">Visualizes events + derived signals</text>
+  </g>
+
+  <!-- Cross-links -->
+  <!-- Event bus to classifier -->
+  <path class="arrow" d="M330,555 C390,555 390,210 430,210" />
+
+  <!-- GFKB to warning-policy (feedback loop) -->
+  <path class="arrowSoft dashed" d="M430,340 C330,340 330,275 330,240" />
+  <text x="275" y="355" class="boxText" fill="#64748b">knowledge feedback</text>
+
+  <!-- Services to dashboard (read paths) -->
+  <path class="arrowSoft" d="M760,210 C800,210 800,310 820,310" />
+  <path class="arrowSoft" d="M760,340 C800,340 800,355 820,355" />
+  <path class="arrowSoft" d="M760,465 C800,465 800,400 820,400" />
+
+  <!-- Dashboard triggers runner (operator action) -->
+  <path class="arrowSoft dashed" d="M820,300 C700,160 520,150 330,170" />
+  <text x="600" y="150" class="boxText" fill="#64748b">trigger run</text>
+
+  <!-- Legend -->
+  <g transform="translate(70,650)">
+    <rect x="0" y="0" width="1060" height="80" rx="14" class="soft fillE" />
+    <text x="20" y="30" class="boxTitle">Legend</text>
+    <path class="arrow" d="M140,24 L210,24" />
+    <text x="220" y="29" class="boxText">primary pipeline flow</text>
+    <path class="arrowSoft dashed" d="M440,24 L510,24" />
+    <text x="520" y="29" class="boxText">feedback / control loop</text>
+    <path class="arrowSoft" d="M760,24 L830,24" />
+    <text x="840" y="29" class="boxText">read/visualize link</text>
+
+    <text x="20" y="58" class="boxText">This is a logical architecture diagram; deployment may co-locate services in a single node (as in this repository).</text>
+  </g>
+</svg>

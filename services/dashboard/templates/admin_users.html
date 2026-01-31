@@ -1,0 +1,93 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Admin Users</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items:center; }
+    .adminBanner{display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border-radius:999px; background: rgba(251,113,133,.16); border:1px solid rgba(251,113,133,.30); margin-right:10px; font-weight:700;}
+    .wrap { padding: 18px; }
+    .small { color: var(--muted); font-size: 0.9em; }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border: 1px solid rgba(37,99,235,.35); }
+    .btnDanger { background: rgba(251,113,133,.18); border: 1px solid rgba(251,113,133,.35); }
+    button.btnDanger { padding: 8px 10px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <span class="adminBanner">ADMIN</span>
+      <strong>Users & RBAC</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button class="btnDanger" type="submit" style="border-radius:999px; padding:6px 10px;">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/warnings">Warnings</a> · <a href="/scenarios">Scenario Runs</a> · <a href="/admin/agents">Agents</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card" style="margin-bottom:16px">
+      <h3 style="margin-top:0">View as (RBAC preview)</h3>
+      <div class="small" style="margin-bottom:10px">This doesn't modify user accounts. It temporarily changes what <em>you</em> see (admin-only).</div>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <form method="post" action="/admin/impersonate" style="display:flex; gap:8px; align-items:center;">
+          {{ csrf_input(request) | safe }}
+          <select name="role">
+            <option value="viewer">viewer</option>
+            <option value="operator">operator</option>
+            <option value="admin">admin</option>
+          </select>
+          <button class="btn" type="submit">View as</button>
+        </form>
+        <form method="post" action="/admin/impersonate/clear" style="display:inline-block;">
+          {{ csrf_input(request) | safe }}
+          <button class="btnDanger" type="submit">Clear</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Users</h3>
+      <table>
+        <thead><tr><th>Email</th><th>Active</th><th>Roles</th><th>Set role</th><th>Action</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td><span class="pill">{{ u.email }}</span></td>
+            <td>{{ 'yes' if u.is_active else 'no' }}</td>
+            <td class="small">{{ (u.roles or []) | join(', ') }}</td>
+            <td>
+              <form method="post" action="/admin/users/roles" style="display:flex; gap:8px; align-items:center;">
+                {{ csrf_input(request) | safe }}
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <select name="role">
+                  <option value="viewer">viewer</option>
+                  <option value="operator">operator</option>
+                  <option value="admin">admin</option>
+                </select>
+                <button class="btn" type="submit">Apply</button>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/admin/users/toggle" style="display:inline-block;">
+                {{ csrf_input(request) | safe }}
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <button class="btnDanger" type="submit">Toggle active</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="small">Tip: keep at least one admin account active.</p>
+    </div>
+  </div>
+</body>
+</html>

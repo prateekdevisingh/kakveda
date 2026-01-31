@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Experiments</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <div>
+          <a class="btn secondary" href="/">Home</a>
+          <a class="btn secondary" href="/runs">Runs</a>
+          <a class="btn secondary" href="/datasets">Datasets</a>
+          <a class="btn secondary" href="/eval">Eval</a>
+          <a class="btn secondary" href="/playground">Playground</a>
+          <a class="btn secondary" href="/prompts">Prompts</a>
+          <a class="btn" href="/experiments">Experiments</a>
+        </div>
+        <div>
+          <a class="btn secondary" href="/auth/logout">Logout</a>
+        </div>
+      </div>
+
+      <h1>Experiments</h1>
+      <p class="muted">Group multiple runs under a single experiment to compare output/latency/provider splits.</p>
+
+      <div class="card" style="margin-top: 12px">
+        <h3>Create experiment</h3>
+        <form method="post" action="/experiments/create">
+          {{ csrf_input(request) | safe }}
+          <div class="grid2">
+            <div>
+              <label>Name</label>
+              <input name="name" placeholder="e.g. prompt-v1-vs-v2" required />
+            </div>
+            <div>
+              <label>Description</label>
+              <input name="description" placeholder="Optional" />
+            </div>
+          </div>
+          <button class="btn" type="submit">Create</button>
+        </form>
+      </div>
+
+      <div class="card" style="margin-top: 12px">
+        <h3>All experiments</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Description</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in experiments %}
+            <tr>
+              <td>{{ e.id }}</td>
+              <td><a href="/experiments/{{ e.id }}">{{ e.name }}</a></td>
+              <td>{{ e.description or '' }}</td>
+              <td>{{ e.created_at }}</td>
+              <td><a class="btn secondary" href="/experiments/{{ e.id }}">Open</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if not experiments %}
+        <p class="muted">No experiments yet — create one above.</p>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

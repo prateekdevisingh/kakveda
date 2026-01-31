@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Forgot Password</title>
+  <style>
+    body { font-family: system-ui, Arial; background: #0b1220; color: #e6edf3; }
+    .card { max-width: 460px; margin: 8vh auto; background: #111a2e; padding: 24px; border-radius: 12px; border: 1px solid #24304a; }
+    input, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2b3a58; background: #0b1220; color: #e6edf3; }
+    button { cursor: pointer; background: #f59e0b; border: none; margin-top: 10px; }
+    a { color: #93c5fd; }
+    .ok { color: #86efac; }
+    .err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Forgot password</h2>
+    {% if message %}<p class="ok">{{ message }}</p>{% endif %}
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <form method="post" action="/auth/forgot">
+      {{ csrf_input(request) | safe }}
+      <label>Email</label>
+      <input name="email" type="email" required />
+      <button type="submit">Generate reset link</button>
+    </form>
+    <p style="margin-top:12px;"><a href="/auth/login">Back to login</a></p>
+  </div>
+</body>
+</html>

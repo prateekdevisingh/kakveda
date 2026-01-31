@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prompt {{ prompt.name }}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="topbar">
+        <div>
+          <a class="btn secondary" href="/">Home</a>
+          <a class="btn secondary" href="/prompts">Prompts</a>
+          <a class="btn secondary" href="/experiments">Experiments</a>
+          <a class="btn secondary" href="/runs">Runs</a>
+        </div>
+        <div>
+          <a class="btn secondary" href="/auth/logout">Logout</a>
+        </div>
+      </div>
+
+      <h1>Prompt: {{ prompt.name }}</h1>
+      {% if prompt.description %}
+      <p class="muted">{{ prompt.description }}</p>
+      {% endif %}
+
+      <div class="card" style="margin-top: 12px">
+        <h3>Add version</h3>
+        <form method="post" action="/prompts/{{ prompt.id }}/versions/create">
+          {{ csrf_input(request) | safe }}
+          <label>Prompt text</label>
+          <textarea name="prompt_text" rows="7" placeholder="Write your prompt..." required></textarea>
+
+          <div class="grid3" style="margin-top: 8px">
+            <div>
+              <label>Default model</label>
+              <input name="default_model" placeholder="e.g. llama3" />
+            </div>
+            <div>
+              <label>Default provider</label>
+              <input name="default_provider" placeholder="e.g. ollama" />
+            </div>
+            <div>
+              <label>Tags (comma separated)</label>
+              <input name="tags" placeholder="prod, support" />
+            </div>
+          </div>
+          <button class="btn" type="submit">Create version</button>
+        </form>
+      </div>
+
+      <div class="card" style="margin-top: 12px">
+        <h3>Versions</h3>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Created</th>
+              <th>Default model</th>
+              <th>Default provider</th>
+              <th>Tags</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for v in versions %}
+            <tr>
+              <td>v{{ v.version }}</td>
+              <td>{{ v.created_at }}</td>
+              <td>{{ v.default_model or '' }}</td>
+              <td>{{ v.default_provider or '' }}</td>
+              <td>
+                {% for t in v.tags %}<span class="pill">{{ t }}</span>{% endfor %}
+              </td>
+              <td style="white-space: nowrap">
+                <a class="btn secondary" href="/playground?prompt_version_id={{ v.id }}">Run in Playground</a>
+              </td>
+            </tr>
+            <tr>
+              <td colspan="6" class="muted" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">
+                {{ v.prompt_text_preview }}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if not versions %}
+        <p class="muted">No versions yet. Add v1 above.</p>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>

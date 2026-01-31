@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Scenario Runs</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items:center; }
+    .wrap { padding: 18px; }
+    .small { color: var(--muted); font-size: 0.9em; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr 120px; gap: 12px; align-items:end; }
+    /* keep a small pill style for app badges */
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border: 1px solid rgba(37,99,235,.35); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Scenario Runs</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button type="submit" class="btn" style="padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/runs">Runs</a> · <a href="/datasets">Datasets</a> · <a href="/warnings">Warnings</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Run a scenario</h3>
+      <form method="post" action="/scenarios/run">
+        {{ csrf_input(request) | safe }}
+        <div class="grid">
+          <div>
+            <label>App</label>
+            <select name="app_id">
+              <option value="app-A">app-A</option>
+              <option value="app-B">app-B</option>
+            </select>
+          </div>
+          <div>
+            <label>Prompt</label>
+            <input name="prompt" value="Summarize this document and include citations even if not provided." />
+          </div>
+          <div>
+            <button class="btn" type="submit">Run</button>
+          </div>
+        </div>
+        <p class="small">This runs the same flow as `scripts/demo_client.py`: call `/warn`, store it, then `/ingest` a trace (Ollama if available, else stub).</p>
+      </form>
+
+      <h3 style="margin-top:18px;">Latest runs</h3>
+      <table>
+        <thead><tr><th>When</th><th>App</th><th>Agent</th><th>Prompt</th><th>Open</th><th>Note</th></tr></thead>
+        <tbody>
+          {% for r in runs %}
+          <tr>
+            <td class="small">{{ r.ts }}</td>
+            <td><span class="pill">{{ r.app_id }}</span></td>
+            <td class="small">{{ r.agent_id }}</td>
+            <td>{{ r.prompt }}</td>
+            <td>
+              {% if r.run_id %}
+                <a class="btn" style="padding:6px 10px; white-space:nowrap;" href="/runs/{{ r.run_id }}">Open Run</a>
+              {% else %}
+                <span class="small">—</span>
+              {% endif %}
+            </td>
+            <td class="small">{{ r.note or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

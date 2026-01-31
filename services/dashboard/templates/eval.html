@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Evaluations</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="topbar">
+      <div>
+  <a class="brand" href="/">kakveda</a>
+        <a class="nav" href="/scenarios">Scenarios</a>
+        <a class="nav" href="/warnings">Warnings</a>
+        <a class="nav" href="/runs">Runs</a>
+        <a class="nav" href="/datasets">Datasets</a>
+        <a class="nav active" href="/eval">Eval</a>
+      </div>
+      <div class="right">
+        <span class="badge">{{ email }}</span>
+        <span class="badge">role: {{ role }}</span>
+        <a class="nav" href="/logout">Logout</a>
+      </div>
+    </div>
+
+    <div class="container">
+      <h1 class="h1">Eval runner</h1>
+      <p class="muted">Run a deterministic demo evaluator over a dataset and store results.</p>
+
+      <div class="grid">
+        <div class="card">
+          <h2 class="h2">Run evaluation</h2>
+          <form method="post" action="/eval/run">
+            {{ csrf_input(request) | safe }}
+            <label class="label">Dataset</label>
+            <select class="input" name="dataset_id" required>
+              {% for d in datasets %}
+              <option value="{{ d.id }}">{{ d.name }} ({{ d.id }})</option>
+              {% endfor %}
+            </select>
+            <button class="btn" type="submit">Run</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h2 class="h2">Recent eval runs</h2>
+          {% if evals|length == 0 %}
+            <p class="muted">No eval runs yet.</p>
+          {% else %}
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Dataset</th>
+                  <th>Name</th>
+                  <th>When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for e in evals %}
+                <tr>
+                  <td><a href="/eval/{{ e.id }}">{{ e.id }}</a></td>
+                  <td>{{ e.dataset_id }}</td>
+                  <td>{{ e.name }}</td>
+                  <td class="muted">{{ e.ts }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

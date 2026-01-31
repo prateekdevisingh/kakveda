@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Datasets</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header{padding:14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
+    .wrap{padding:18px;}
+    .small{color:var(--muted); font-size:.9em}
+    .pill{display:inline-block; padding:2px 10px; border-radius:999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35);}
+    .grid{display:grid; grid-template-columns: 260px 1fr 120px; gap: 12px; align-items:end; margin-bottom: 14px}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Datasets</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button type="submit" class="btn" style="padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/warnings">Warnings</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Create dataset</h3>
+      <form method="post" action="/datasets">
+        {{ csrf_input(request) | safe }}
+        <div class="grid">
+          <div>
+            <div class="small">Name</div>
+            <input name="name" placeholder="qa-citations" />
+          </div>
+          <div>
+            <div class="small">Description</div>
+            <input name="description" placeholder="dataset for citation hallucination scenarios" />
+          </div>
+          <div>
+            <button class="btn" type="submit">Create</button>
+          </div>
+        </div>
+      </form>
+
+      <h3>Datasets</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Created</th><th>Description</th></tr></thead>
+        <tbody>
+          {% for d in datasets %}
+          <tr>
+            <td><a href="/datasets/{{ d.id }}">{{ d.name }}</a></td>
+            <td class="small">{{ d.created_at }}</td>
+            <td class="small">{{ d.description or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+  <p class="small">Datasets primitive: a container of examples for evaluation (minimal demo version).</p>
+    </div>
+  </div>
+</body>
+</html>

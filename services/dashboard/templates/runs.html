@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Runs</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; }
+    .filters { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:12px }
+    .pill{display:inline-block; padding:2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35);}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Runs</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button type="submit" class="btn" style="padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/projects">Projects</a> · <a href="/scenarios">Scenarios</a> · <a href="/playground">Playground</a> · <a href="/warnings">Warnings</a> · <a href="/datasets">Datasets</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <form class="filters" method="get" action="/runs">
+        <div>
+          <div class="small">Search</div>
+          <input name="q" value="{{ q }}" placeholder="free text or: provider:ollama latency_ms>2000 tag:prod thumb:down has:error" style="width:520px" />
+        </div>
+        <div>
+          <div class="small">App</div>
+          <input name="app_id" value="{{ app_id }}" placeholder="app-A" style="width:140px" />
+        </div>
+        <div>
+          <div class="small">Agent</div>
+          <input name="agent_id" value="{{ agent_id }}" placeholder="dashboard-ui" style="width:160px" />
+        </div>
+        <div>
+          <div class="small">Provider</div>
+          <input name="provider" value="{{ provider }}" placeholder="ollama|stub" style="width:140px" />
+        </div>
+        <div>
+          <div class="small">Since</div>
+          <input name="since" value="{{ since }}" placeholder="YYYY-MM-DD" style="width:140px" />
+        </div>
+        <div>
+          <div class="small">Until</div>
+          <input name="until" value="{{ until }}" placeholder="YYYY-MM-DD" style="width:140px" />
+        </div>
+        <div>
+          <button class="btn" type="submit">Filter</button>
+        </div>
+      </form>
+
+      <table>
+        <thead><tr><th>When</th><th>App</th><th>Agent</th><th>Provider</th><th>Name</th><th>Status</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Input</th></tr></thead>
+        <tbody>
+          {% for r in runs %}
+          <tr>
+            <td class="small">{{ r.ts }}</td>
+            <td><span class="pill">{{ r.app_id }}</span></td>
+            <td class="small">{{ r.agent_id }}</td>
+            <td class="small">{% if r.provider %}{{ r.provider }}{% if r.model %} <span class="muted">({{ r.model }})</span>{% endif %}{% else %}—{% endif %}</td>
+            <td><a href="/runs/{{ r.id }}">{{ r.name }}</a></td>
+            <td class="small">{{ r.status }}</td>
+            <td class="small">{{ r.duration_ms or '' }} ms</td>
+            <td class="small">{{ r.total_tokens or '' }}</td>
+            <td class="small">{% if r.cost_usd is not none %}${{ '%.6f'|format((r.cost_usd or 0)/1000000) }}{% endif %}</td>
+            <td class="small">{{ r.input_json }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+  <p class="small">Runs timeline backed by dashboard SQLite.</p>
+    </div>
+  </div>
+</body>
+</html>

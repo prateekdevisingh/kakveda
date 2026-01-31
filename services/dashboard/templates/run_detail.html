@@ -1,0 +1,219 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>kakveda - Run {{ run.id }}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* keep run detail layout specific rules here */
+    .wrap { padding: 18px; display:grid; grid-template-columns: 1.25fr 0.75fr; gap: 16px; }
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    pre { white-space: pre-wrap; word-break: break-word; }
+
+    .spanRow{display:grid; grid-template-columns: 1fr 320px; gap: 12px; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--border);}
+    .spanLeft{display:flex; align-items:center; gap:8px; min-width: 0;}
+    .caret{border:1px solid var(--border2); background: var(--bg); color: var(--text); border-radius: 6px; padding: 2px 6px; font-size: .85em; line-height: 1; cursor:pointer;}
+    .caret.hidden{visibility:hidden;}
+    .spanName{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+    .spanMeta{color: var(--muted); font-size: .85em;}
+    .barLane{position:relative; height: 16px; background: rgba(255,255,255,.04); border:1px solid var(--border2); border-radius: 999px; overflow:hidden;}
+    .bar{position:absolute; top:0; bottom:0; left:0; width: 10%; background: rgba(37,99,235,.55);}
+    .barLabel{position:absolute; right:8px; top:50%; transform: translateY(-50%); font-size:.78em; color: rgba(230,237,243,.85);}
+    .metaBox{margin-top:8px; padding:10px; border:1px solid var(--border2); border-radius: 8px; background: rgba(255,255,255,.03);}
+    .metaBox pre{margin:0; border:none; background: transparent; padding:0;}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Run {{ run.id }}</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+      {% if request.cookies.get('aitester_impersonate_role') %}
+      <form method="post" action="/admin/impersonate/clear" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button type="submit" class="btn" style="padding:6px 10px; border-radius:999px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);">Currently viewing as: {{ role }} (clear)</button>
+      </form>
+      {% endif %}
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/projects">Projects</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/warnings">Warnings</a> · <a href="/datasets">Datasets</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="small">App: <strong>{{ run.app_id }}</strong> · Agent: <strong>{{ run.agent_id }}</strong> · Status: <strong>{{ run.status }}</strong> · Duration: <strong>{{ run.duration_ms or '' }} ms</strong></div>
+
+      <h3>Trace timeline</h3>
+      {% if span_items is defined and span_items|length > 0 %}
+        <div class="small" style="margin-bottom:10px">Nested spans + waterfall bars (no heavy JS).</div>
+        <div id="spanTree">
+          {% for sp in span_items %}
+          <div class="spanRow" data-id="{{ sp.id }}" data-parent="{{ sp.parent_id if sp.parent_id is not none else '' }}" data-depth="{{ sp.depth }}" data-has-children="{{ '1' if sp.has_children else '0' }}">
+            <div class="spanLeft" style="padding-left: {{ 14 * sp.depth }}px">
+              <button class="caret {% if not sp.has_children %}hidden{% endif %}" type="button" aria-label="toggle">▾</button>
+              <div style="min-width:0">
+                <div class="spanName"><code>{{ sp.name }}</code></div>
+                <div class="spanMeta">{{ sp.duration_ms }} ms · {{ sp.start_ts }}</div>
+              </div>
+            </div>
+            <div>
+              <div class="barLane" title="offset={{ '%.0f'|format(sp.pct_left) }}% width={{ '%.0f'|format(sp.pct_width) }}%">
+                <div class="bar" style="left: {{ sp.pct_left }}%; width: {{ sp.pct_width }}%"></div>
+                <div class="barLabel">{{ sp.duration_ms }}ms</div>
+              </div>
+            </div>
+          </div>
+          <div class="metaBox" data-meta-for="{{ sp.id }}" style="display:none;">
+            <div class="small" style="margin-bottom:6px">meta_json</div>
+            <pre class="small">{{ sp.meta_json }}</pre>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="small" style="margin-top:10px">Tip: click ▾ to collapse children. Double-click a row to show meta.</div>
+      {% else %}
+        <div class="small">No spans recorded for this run yet.</div>
+      {% endif %}
+
+      <h3>Input</h3>
+      <pre>{{ input_pretty }}</pre>
+      <h3>Output</h3>
+      <pre>{{ output_pretty }}</pre>
+      {% if run.error %}
+      <h3>Error</h3>
+      <pre>{{ run.error }}</pre>
+      {% endif %}
+  <p class="small">Run detail page (single run, inspect I/O and metadata).</p>
+    </div>
+
+    <div class="card">
+      <h3>Add feedback</h3>
+      <div class="small" style="margin-bottom:10px">
+        Tokens: <strong>{{ run.total_tokens or '' }}</strong>
+        {% if run.cost_usd is not none %}· Cost: <strong>${{ '%.6f'|format((run.cost_usd or 0)/1000000) }}</strong>{% endif %}
+      </div>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:start;">
+        <form method="post" action="/runs/{{ run.id }}/feedback" style="display:inline-block">
+          {{ csrf_input(request) | safe }}
+          <input type="hidden" name="key" value="thumb" />
+          <input type="hidden" name="value" value="up" />
+          <button class="btn" type="submit" style="{% if thumb_state == 'up' %}background: rgba(34,197,94,.22); border:1px solid rgba(34,197,94,.45);{% endif %}">👍 Up</button>
+        </form>
+        <form method="post" action="/runs/{{ run.id }}/feedback" style="display:inline-block">
+          {{ csrf_input(request) | safe }}
+          <input type="hidden" name="key" value="thumb" />
+          <input type="hidden" name="value" value="down" />
+          <button class="btn" type="submit" style="{% if thumb_state == 'down' %}background: rgba(239,68,68,.20); border:1px solid rgba(239,68,68,.40);{% else %}background: rgba(255,255,255,.06){% endif %}">👎 Down</button>
+        </form>
+      </div>
+
+      <form method="post" action="/runs/{{ run.id }}/feedback" style="margin-top:12px">
+        {{ csrf_input(request) | safe }}
+        <div class="small">Human label</div>
+        <input name="value" value="{{ label_state or '' }}" placeholder="e.g. good, bad, hallucination, needs-review" />
+        <input type="hidden" name="key" value="label" />
+        <div style="margin-top:10px"><button class="btn" type="submit">Save label</button></div>
+      </form>
+
+      <form method="post" action="/runs/{{ run.id }}/feedback" style="margin-top:12px">
+        {{ csrf_input(request) | safe }}
+        <div class="small">Comment</div>
+        <textarea name="value" rows="3" placeholder="What was good/bad? Any notes for future?" ></textarea>
+        <input type="hidden" name="key" value="comment" />
+        <div style="margin-top:10px"><button class="btn" type="submit">Save comment</button></div>
+      </form>
+
+      <form method="post" action="/runs/{{ run.id }}/feedback" style="margin-top:12px">
+        {{ csrf_input(request) | safe }}
+        <div class="small">Tag</div>
+        <input name="value" placeholder="e.g. prod, regression, safety" />
+        <input type="hidden" name="key" value="tag" />
+        <div style="margin-top:10px"><button class="btn" type="submit">Add tag</button></div>
+      </form>
+
+      <h3 style="margin-top:16px">Feedback</h3>
+      <table>
+        <thead><tr><th>When</th><th>Key</th><th>Value</th><th>Actor</th></tr></thead>
+        <tbody>
+          {% for f in feedback %}
+          <tr>
+            <td class="small">{{ f.ts }}</td>
+            <td class="small">{{ f.key }}</td>
+            <td>{{ f.value }}</td>
+            <td class="small">{{ f.actor_email or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const rows = Array.from(document.querySelectorAll('#spanTree .spanRow'));
+      if (!rows.length) return;
+
+      const byId = new Map(rows.map(r => [r.getAttribute('data-id'), r]));
+      function childrenOf(id){
+        return rows.filter(r => r.getAttribute('data-parent') === String(id));
+      }
+
+      function setHidden(el, hidden){
+        el.style.display = hidden ? 'none' : '';
+        const meta = document.querySelector(`[data-meta-for="${el.getAttribute('data-id')}"]`);
+        if (meta && hidden) meta.style.display = 'none';
+      }
+
+      function hideSubtree(id){
+        for (const ch of childrenOf(id)){
+          setHidden(ch, true);
+          hideSubtree(ch.getAttribute('data-id'));
+        }
+      }
+
+      function showSubtree(id){
+        for (const ch of childrenOf(id)){
+          setHidden(ch, false);
+          // Only auto-expand one level; deeper levels respect their own state.
+        }
+      }
+
+      function isCollapsed(row){ return row.getAttribute('data-collapsed') === '1'; }
+      function setCollapsed(row, v){ row.setAttribute('data-collapsed', v ? '1' : '0'); }
+
+      rows.forEach(row => {
+        // meta toggle on double click
+        row.addEventListener('dblclick', () => {
+          const meta = document.querySelector(`[data-meta-for="${row.getAttribute('data-id')}"]`);
+          if (!meta) return;
+          meta.style.display = (meta.style.display === 'none' || !meta.style.display) ? '' : 'none';
+        });
+
+        const caret = row.querySelector('.caret');
+        if (!caret) return;
+        if (row.getAttribute('data-has-children') !== '1') return;
+
+        caret.addEventListener('click', () => {
+          const id = row.getAttribute('data-id');
+          const collapsed = isCollapsed(row);
+          if (!collapsed){
+            setCollapsed(row, true);
+            caret.textContent = '▸';
+            hideSubtree(id);
+          } else {
+            setCollapsed(row, false);
+            caret.textContent = '▾';
+            showSubtree(id);
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
