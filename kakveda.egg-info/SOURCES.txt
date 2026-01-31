@@ -1,0 +1,17 @@
+LICENSE
+NOTICE
+README.md
+pyproject.toml
+setup.py
+kakveda.egg-info/PKG-INFO
+kakveda.egg-info/SOURCES.txt
+kakveda.egg-info/dependency_links.txt
+kakveda.egg-info/entry_points.txt
+kakveda.egg-info/top_level.txt
+kakveda_cli/__init__.py
+kakveda_cli/cli.py
+kakveda_cli/compose.py
+kakveda_cli/config.py
+kakveda_cli/prompts.py
+tests/test_cli.py
+tests/test_similarity.py

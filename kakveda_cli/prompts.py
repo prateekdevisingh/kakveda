@@ -50,6 +50,13 @@ class AnswersRaw:
     model_api_key: Optional[str]
     model_base_url: Optional[str]
     model_name: Optional[str]
+    # SMTP config
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[str] = None
+    smtp_user: Optional[str] = None
+    smtp_pass: Optional[str] = None
+    smtp_from: Optional[str] = None
+    smtp_tls: Optional[bool] = None
 
 
 def collect_answers() -> AnswersRaw:

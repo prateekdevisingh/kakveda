@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: kakveda
+Version: 0.1.0
+Summary: Kakveda – LLM failure intelligence platform (repo CLI utilities)
+Requires-Python: >=3.11
+License-File: LICENSE
+License-File: NOTICE
+Dynamic: license-file
+Dynamic: requires-python
