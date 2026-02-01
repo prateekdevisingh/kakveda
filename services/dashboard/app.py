@@ -1107,6 +1107,71 @@ async def home(request: Request, user: dict[str, Any] = Depends(require_login)):
     )
 
 
+@app.get("/failure/{failure_id}", response_class=HTMLResponse)
+async def failure_detail(request: Request, failure_id: str, user: dict[str, Any] = Depends(require_login)):
+    """Show detailed information about a specific failure."""
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+
+    failure = None
+    related_patterns = []
+    related_warnings = []
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            # Fetch failure details from GFKB
+            resp = await client.get(f"{GFKB_URL}/failures")
+            all_failures = resp.json().get("failures", [])
+            # Find the specific failure (match failure_id with or without version)
+            for f in all_failures:
+                fid = f.get("failure_id", "")
+                version = f.get("version", 1)
+                full_id = f"{fid}v{version}"
+                if failure_id == fid or failure_id == full_id or failure_id.startswith(fid):
+                    failure = f
+                    break
+        except Exception:
+            failure = None
+
+        try:
+            # Fetch patterns that might be related
+            resp = await client.get(f"{GFKB_URL}/patterns")
+            all_patterns = resp.json().get("patterns", [])
+            if failure:
+                failure_apps = set(failure.get("affected_apps", []))
+                for p in all_patterns:
+                    pattern_apps = set(p.get("affected_apps", []))
+                    if failure_apps & pattern_apps:
+                        related_patterns.append(p)
+        except Exception:
+            related_patterns = []
+
+    # Get related warnings from database
+    with get_session() as s:
+        related_warnings = (
+            s.query(WarningEvent)
+            .order_by(WarningEvent.ts.desc())
+            .limit(10)
+            .all()
+        )
+
+    return templates.TemplateResponse(
+        "failure_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "failure": failure,
+            "failure_id": failure_id,
+            "related_patterns": related_patterns,
+            "related_warnings": related_warnings,
+        },
+    )
+
+
 @app.get("/warnings", response_class=HTMLResponse)
 async def warnings_page(request: Request, user: dict[str, Any] = Depends(require_login)):
     if isinstance(user, RedirectResponse):

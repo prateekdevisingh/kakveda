@@ -11,7 +11,7 @@ Please **do not** open public GitHub issues for vulnerabilities.
 
 Report privately by email:
 
-- **security@kakveda.com**
+- **help@kakveda.com**
 
 Include:
 

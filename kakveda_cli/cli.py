@@ -17,6 +17,26 @@ from .compose import (
 from .config import SetupAnswers, env_dict_from_answers, write_env_file
 from .prompts import collect_answers
 
+__version__ = "1.0.0"
+
+BANNER = """
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   ██╗  ██╗ █████╗ ██╗  ██╗██╗   ██╗███████╗██████╗  █████╗ ║
+║   ██║ ██╔╝██╔══██╗██║ ██╔╝██║   ██║██╔════╝██╔══██╗██╔══██╗║
+║   █████╔╝ ███████║█████╔╝ ██║   ██║█████╗  ██║  ██║███████║║
+║   ██╔═██╗ ██╔══██║██╔═██╗ ╚██╗ ██╔╝██╔══╝  ██║  ██║██╔══██║║
+║   ██║  ██╗██║  ██║██║  ██╗ ╚████╔╝ ███████╗██████╔╝██║  ██║║
+║   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═════╝ ╚═╝  ╚═╝║
+║                                                           ║
+║   LLM Failure Intelligence Platform                       ║
+║   Version: {version}                                          ║
+║   Author: Prateek Chaudhary                               ║
+║   https://kakveda.com                                     ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+""".format(version=__version__)
+
 
 def _repo_root_from_cwd() -> Path:
     # Works when user runs `kakveda` inside the repo.
@@ -161,9 +181,124 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Show logs from services."""
+    repo_root = _repo_root_from_cwd()
+    plan = plan_compose(repo_root, use_prod=args.prod)
+    
+    service = args.service if args.service else None
+    tail = args.tail if args.tail else 100
+    
+    rc, out, err = get_compose_logs(repo_root, plan, service, tail=tail)
+    
+    if out:
+        print(out)
+    if err:
+        print(err, file=sys.stderr)
+    
+    return rc
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    """Show version and info."""
+    print(BANNER)
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Check system requirements and diagnose issues."""
+    import shutil
+    import subprocess
+    
+    print("🔍 Kakveda Doctor - System Check\n")
+    print("=" * 50)
+    
+    issues = []
+    
+    # Check Docker
+    print("\n📦 Docker:")
+    docker_path = shutil.which("docker")
+    if docker_path:
+        try:
+            result = subprocess.run(["docker", "--version"], capture_output=True, text=True)
+            print(f"   ✅ Docker: {result.stdout.strip()}")
+        except Exception as e:
+            print(f"   ❌ Docker error: {e}")
+            issues.append("Docker not working properly")
+    else:
+        print("   ❌ Docker not found")
+        issues.append("Docker not installed")
+    
+    # Check Docker Compose
+    print("\n🐳 Docker Compose:")
+    try:
+        # Try V2 first
+        result = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"   ✅ Docker Compose V2: {result.stdout.strip()}")
+        else:
+            raise Exception("V2 not available")
+    except Exception:
+        try:
+            # Try V1
+            result = subprocess.run(["docker-compose", "--version"], capture_output=True, text=True)
+            version_str = result.stdout.strip()
+            print(f"   ⚠️  Docker Compose V1: {version_str}")
+            print("   💡 Tip: Upgrade to V2 for better compatibility")
+            print("      See: TROUBLESHOOTING.md for upgrade instructions")
+        except Exception:
+            print("   ❌ Docker Compose not found")
+            issues.append("Docker Compose not installed")
+    
+    # Check Python
+    print("\n🐍 Python:")
+    print(f"   ✅ Python: {sys.version}")
+    
+    # Check .env
+    print("\n📄 Configuration:")
+    repo_root = _repo_root_from_cwd()
+    env_path = repo_root / ".env"
+    if env_path.exists():
+        print(f"   ✅ .env file found: {env_path}")
+    else:
+        print("   ⚠️  .env file not found")
+        print("   💡 Run: kakveda init")
+    
+    # Check if services are running
+    print("\n🚀 Services:")
+    try:
+        plan = plan_compose(repo_root, use_prod=False)
+        ps_out = run_compose_ps_quiet(repo_root, plan)
+        if ps_out.strip():
+            running = [line for line in ps_out.strip().split('\n') if line.strip()]
+            print(f"   ✅ {len(running)} container(s) running")
+        else:
+            print("   ⚠️  No containers running")
+            print("   💡 Run: kakveda up")
+    except Exception as e:
+        print(f"   ⚠️  Could not check services: {e}")
+    
+    # Summary
+    print("\n" + "=" * 50)
+    if issues:
+        print(f"\n❌ Found {len(issues)} issue(s):")
+        for issue in issues:
+            print(f"   • {issue}")
+        print("\n📖 See TROUBLESHOOTING.md for solutions")
+        return 1
+    else:
+        print("\n✅ All checks passed! Kakveda is ready.")
+        return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="kakveda", description="Kakveda setup + run CLI")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(
+        prog="kakveda",
+        description="Kakveda – LLM Failure Intelligence Platform CLI",
+        epilog="Author: Prateek Chaudhary | https://kakveda.com"
+    )
+    p.add_argument("-v", "--version", action="store_true", help="Show version info")
+    sub = p.add_subparsers(dest="cmd")
 
     p_init = sub.add_parser("init", help="Create a .env file interactively")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing .env")
@@ -224,12 +359,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_reset.set_defaults(func=cmd_reset)
 
+    # Logs command
+    p_logs = sub.add_parser("logs", help="Show logs from services")
+    p_logs.add_argument(
+        "service",
+        nargs="?",
+        default=None,
+        help="Service name (e.g., dashboard, gfkb). If omitted, shows all logs",
+    )
+    p_logs.add_argument(
+        "--tail",
+        type=int,
+        default=100,
+        help="Number of log lines to show (default: 100)",
+    )
+    p_logs.add_argument(
+        "--prod",
+        action="store_true",
+        help="Use docker-compose.prod.yml",
+    )
+    p_logs.set_defaults(func=cmd_logs)
+
+    # Doctor command
+    p_doctor = sub.add_parser("doctor", help="Check system requirements and diagnose issues")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # Version command
+    p_version = sub.add_parser("version", help="Show version info")
+    p_version.set_defaults(func=cmd_version)
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     ns = parser.parse_args(argv)
+    
+    # Handle -v/--version flag
+    if getattr(ns, 'version', False):
+        print(BANNER)
+        return 0
+    
+    # If no command given, show help
+    if not ns.cmd:
+        print(BANNER)
+        parser.print_help()
+        return 0
+    
     return int(ns.func(ns))
 
 

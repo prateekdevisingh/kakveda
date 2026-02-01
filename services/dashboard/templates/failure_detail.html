@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Failure: {{ failure_id }} - kakveda</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header{position:sticky; top:0; z-index:10; padding:14px 18px; background: var(--bg); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;}
+    .brand{display:flex; gap:10px; align-items:baseline}
+    .small{color:var(--muted); font-size:.9em}
+    .nav{display:flex; gap:10px; align-items:center}
+    .wrap{padding:24px; max-width:1200px; margin:0 auto;}
+    .pill{display:inline-block; padding:4px 14px; border-radius:999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35); font-weight:600;}
+    .pill.severity-high{background: rgba(239,68,68,.15); border-color: rgba(239,68,68,.4); color:#fca5a5;}
+    .pill.severity-medium{background: rgba(245,158,11,.15); border-color: rgba(245,158,11,.4); color:#fcd34d;}
+    .pill.severity-low{background: rgba(34,197,94,.15); border-color: rgba(34,197,94,.4); color:#86efac;}
+    .btn.secondary{background: rgba(255,255,255,.06); border: 1px solid var(--border2);}
+    .back-link{display:inline-flex; align-items:center; gap:6px; margin-bottom:20px; color:var(--link); font-size:.95em;}
+    .back-link:hover{text-decoration:underline;}
+    .detail-grid{display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:20px; margin-top:20px;}
+    .detail-card{background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px;}
+    .detail-card h4{margin:0 0 14px 0; color:var(--muted); font-size:.85em; text-transform:uppercase; letter-spacing:.5px;}
+    .detail-value{font-size:1.1em; font-weight:500;}
+    .tag{display:inline-block; padding:4px 10px; margin:3px 4px 3px 0; border-radius:6px; background:rgba(37,99,235,.1); border:1px solid rgba(37,99,235,.25); font-size:.88em;}
+    .section{margin-top:32px;}
+    .section h3{margin:0 0 16px 0; padding-bottom:10px; border-bottom:1px solid var(--border);}
+    .empty-state{color:var(--muted); font-style:italic; padding:20px; text-align:center;}
+    .hero{background: linear-gradient(135deg, rgba(37,99,235,.08) 0%, rgba(139,92,246,.08) 100%); border:1px solid rgba(37,99,235,.2); border-radius:16px; padding:28px; margin-bottom:24px;}
+    .hero h1{margin:0 0 8px 0; font-size:1.8em; display:flex; align-items:center; gap:12px;}
+    .hero .subtitle{color:var(--muted); font-size:1em;}
+    .stat-row{display:flex; gap:16px; margin-top:16px; flex-wrap:wrap;}
+    .stat{background:rgba(0,0,0,.2); padding:12px 18px; border-radius:10px; min-width:120px;}
+    .stat-label{font-size:.75em; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;}
+    .stat-value{font-size:1.4em; font-weight:600; margin-top:4px;}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <strong>kakveda</strong>
+      <span class="small" style="margin-left:8px; opacity:.9">Author: Prateek Chaudhary</span>
+      <span class="small">role: {{ role }} · {{ email }}</span>
+      {% if role == 'admin' %}
+      <span class="pill" style="margin-left:8px; background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.30);">ADMIN</span>
+      {% endif %}
+    </div>
+    <div class="nav">
+      <a href="/">Dashboard</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/warnings">Warnings</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+      <form method="post" action="/auth/logout" style="display:inline-block; margin-left:10px;">
+        {{ csrf_input(request) | safe }}
+        <button class="btn" type="submit">Logout</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <a href="/" class="back-link">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      Back to Dashboard
+    </a>
+
+    {% if failure %}
+    <div class="hero">
+      <h1>
+        <span class="pill">{{ failure.failure_id }}v{{ failure.version }}</span>
+        {{ failure.failure_type }}
+      </h1>
+      <p class="subtitle">Failure Intelligence Details</p>
+      <div class="stat-row">
+        <div class="stat">
+          <div class="stat-label">Severity</div>
+          <div class="stat-value">
+            <span class="pill severity-{{ failure.impact_severity|lower }}">{{ failure.impact_severity }}</span>
+          </div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Occurrences</div>
+          <div class="stat-value">{{ failure.occurrences or 1 }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Version</div>
+          <div class="stat-value">v{{ failure.version }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Confidence</div>
+          <div class="stat-value">{{ (failure.confidence or 0) | round(2) }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-card">
+        <h4>Affected Applications</h4>
+        <div>
+          {% if failure.affected_apps %}
+            {% for app in failure.affected_apps %}
+              <span class="tag">{{ app }}</span>
+            {% endfor %}
+          {% else %}
+            <span class="small">No apps recorded</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="detail-card">
+        <h4>Fingerprint</h4>
+        <div class="detail-value" style="font-family:monospace; font-size:.9em; word-break:break-all;">
+          {{ failure.fingerprint or 'N/A' }}
+        </div>
+      </div>
+
+      <div class="detail-card" style="grid-column: 1 / -1;">
+        <h4>Description</h4>
+        <div class="detail-value">
+          {{ failure.description or failure.failure_type or 'No description available' }}
+        </div>
+      </div>
+
+      {% if failure.root_cause %}
+      <div class="detail-card" style="grid-column: 1 / -1;">
+        <h4>Root Cause</h4>
+        <div class="detail-value">{{ failure.root_cause }}</div>
+      </div>
+      {% endif %}
+
+      {% if failure.remediation %}
+      <div class="detail-card" style="grid-column: 1 / -1;">
+        <h4>Recommended Remediation</h4>
+        <div class="detail-value">{{ failure.remediation }}</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Related Patterns -->
+    <div class="section">
+      <h3>Related Patterns</h3>
+      {% if related_patterns %}
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Name</th><th>Affected Apps</th></tr>
+        </thead>
+        <tbody>
+          {% for p in related_patterns %}
+          <tr>
+            <td><span class="pill">{{ p.pattern_id }}</span></td>
+            <td>{{ p.name }}</td>
+            <td>{{ (p.affected_apps or []) | join(", ") }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">No related patterns found</div>
+      {% endif %}
+    </div>
+
+    <!-- Recent Warnings -->
+    <div class="section">
+      <h3>Recent Warnings</h3>
+      {% if related_warnings %}
+      <table>
+        <thead>
+          <tr><th>When</th><th>App</th><th>Action</th><th>Confidence</th><th>Message</th></tr>
+        </thead>
+        <tbody>
+          {% for w in related_warnings %}
+          <tr>
+            <td class="small">{{ w.ts }}</td>
+            <td><span class="tag">{{ w.app_id }}</span></td>
+            <td>{{ w.action }}</td>
+            <td>{{ w.confidence }}</td>
+            <td class="small">{{ w.message }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-state">No recent warnings</div>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <div class="hero" style="text-align:center;">
+      <h1>Failure Not Found</h1>
+      <p class="subtitle">The failure "{{ failure_id }}" could not be found in the knowledge base.</p>
+      <a href="/" class="btn" style="margin-top:16px;">Return to Dashboard</a>
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

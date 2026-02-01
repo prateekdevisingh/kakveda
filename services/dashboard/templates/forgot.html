@@ -2,29 +2,143 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>kakveda - Forgot Password</title>
+  <title>Kakveda - Forgot Password</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <style>
-    body { font-family: system-ui, Arial; background: #0b1220; color: #e6edf3; }
-    .card { max-width: 460px; margin: 8vh auto; background: #111a2e; padding: 24px; border-radius: 12px; border: 1px solid #24304a; }
-    input, button { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2b3a58; background: #0b1220; color: #e6edf3; }
-    button { cursor: pointer; background: #f59e0b; border: none; margin-top: 10px; }
-    a { color: #93c5fd; }
-    .ok { color: #86efac; }
-    .err { color: #fca5a5; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Segoe UI', system-ui, Arial, sans-serif; 
+      min-height: 100vh;
+      background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 50%, #1e1b4b 100%);
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card { 
+      width: 100%;
+      max-width: 420px; 
+      background: rgba(15, 23, 42, 0.9);
+      backdrop-filter: blur(10px);
+      padding: 40px 32px; 
+      border-radius: 20px; 
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      text-align: center; 
+    }
+    .logo { margin-bottom: 24px; }
+    .logo img { height: 55px; }
+    h2 { 
+      font-size: 1.5rem; 
+      font-weight: 600; 
+      color: #f1f5f9;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      margin-bottom: 24px;
+    }
+    input { 
+      width: 100%; 
+      padding: 14px 16px; 
+      border-radius: 10px; 
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      background: rgba(30, 41, 59, 0.8);
+      color: #f1f5f9;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+    input:focus {
+      outline: none;
+      border-color: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+    }
+    input::placeholder { color: #64748b; }
+    button { 
+      width: 100%;
+      padding: 14px; 
+      border-radius: 10px;
+      border: none;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: white;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: all 0.2s ease;
+    }
+    button:hover { 
+      background: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+    }
+    a { color: #60a5fa; text-decoration: none; transition: color 0.2s; }
+    a:hover { color: #93c5fd; text-decoration: underline; }
+    .ok { 
+      color: #86efac; 
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+    .err { 
+      color: #fca5a5; 
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+    form { text-align: left; }
+    label { 
+      display: block; 
+      margin-bottom: 6px; 
+      font-size: 0.875rem; 
+      font-weight: 500;
+      color: #94a3b8; 
+    }
+    .links {
+      margin-top: 20px;
+      font-size: 0.9rem;
+    }
+    .footer { 
+      margin-top: 28px; 
+      padding-top: 20px;
+      border-top: 1px solid rgba(148, 163, 184, 0.1);
+      font-size: 0.8rem; 
+      color: #64748b;
+      line-height: 1.6;
+    }
+    .footer strong { color: #94a3b8; font-weight: 500; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>Forgot password</h2>
+    <div class="logo">
+      <img src="/static/logo.svg" alt="Kakveda" />
+    </div>
+    <h2>Forgot Password?</h2>
+    <p class="subtitle">Enter your email and we'll send you a reset link</p>
     {% if message %}<p class="ok">{{ message }}</p>{% endif %}
     {% if error %}<p class="err">{{ error }}</p>{% endif %}
     <form method="post" action="/auth/forgot">
       {{ csrf_input(request) | safe }}
       <label>Email</label>
-      <input name="email" type="email" required />
-      <button type="submit">Generate reset link</button>
+      <input name="email" type="email" required placeholder="you@example.com" />
+      <button type="submit">Send Reset Link</button>
     </form>
-    <p style="margin-top:12px;"><a href="/auth/login">Back to login</a></p>
+    <div class="links">
+      <a href="/auth/login">← Back to Sign In</a>
+    </div>
+    <div class="footer">
+      <strong>LLM Failure Intelligence Platform</strong><br/>
+      © 2026 Kakveda Project
+    </div>
   </div>
 </body>
 </html>

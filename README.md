@@ -4,7 +4,12 @@ Author: **Prateek Chaudhary**
 
 Website: **https://kakveda.com**
 
-> **Open‑source, event‑driven platform that gives LLM systems a memory of failures, runtime “this failed before” warnings, and a system‑level health view.**
+> **Open‑source, event‑driven platform that gives LLM systems a memory of fai## 📚 Docs
+
+- `docs/architecture.md` — architecture and event flow
+- `docs/concepts.md` — core concepts (failures, patterns, fingerprints)
+- `docs/failure-intelligence.md` — what "failure intelligence" means and how Kakveda implements it
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — common issues and solutions, runtime “this failed before” warnings, and a system‑level health view.**
 
 Kakveda sits *around* LLM runtimes and observability tools and adds something most systems lack: **failure memory**. Instead of treating failures as logs, it treats them as first‑class entities that can be remembered, matched, warned against, and analyzed over time.
 
@@ -113,14 +118,25 @@ Trace Ingestion ──▶ Event Bus ──▶ Failure Classifier
 
 ### Prerequisites
 
-* Docker + Docker Compose
+* Docker + Docker Compose (V2 recommended)
 
 ### Run the stack
 
+**Option 1: Using CLI (Recommended)**
+
 ```bash
-git clone https://github.com/<your‑org>/kakveda.git
-cd kakveda
-docker-compose up -d --build
+git clone https://github.com/prateekdevisingh/kakveda.git
+cd kakveda/kakveda-v1.0
+pip install -e .
+kakveda up
+```
+
+**Option 2: Using Docker Compose directly**
+
+```bash
+git clone https://github.com/prateekdevisingh/kakveda.git
+cd kakveda/kakveda-v1.0
+docker-compose up -d
 ```
 
 Open the dashboard:
@@ -128,6 +144,22 @@ Open the dashboard:
 ```
 http://localhost:8110
 ```
+
+### CLI Commands
+
+```bash
+kakveda init        # Interactive .env setup
+kakveda up          # Start all services
+kakveda down        # Stop all services
+kakveda status      # Show running services and URLs
+kakveda logs        # Show logs (all services)
+kakveda logs dashboard --tail 50   # Show specific service logs
+kakveda reset       # Full reset (stops + clears data)
+kakveda doctor      # Diagnose system issues
+kakveda version     # Show version info
+```
+
+> 💡 Having issues? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common problems and solutions.
 
 
 ### Demo Accounts (auto‑created)
