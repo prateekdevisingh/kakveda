@@ -384,7 +384,7 @@ This project is licensed under the **Apache License 2.0** (see `LICENSE`).
 
 Kakveda aims to become a **failure‑intelligence layer** that complements existing LLM runtimes and observability stacks by adding what they lack most: **memory and prevention of past failures**.
 
-The open‑source core will remain transparent and usable, while enterprise editions may add scale, compliance, and advanced intelligence as separate offerings.
+The open-source core is designed to remain transparent, usable, and self-hostable. Future commercial offerings, if any, may focus on scale, operational hardening, and compliance-oriented features, while keeping the core concepts openly accessible.
 
 Intellectual Property Note: The project is released as open source. 
 Certain aspects of the underlying concepts may be the subject of patent filings.
