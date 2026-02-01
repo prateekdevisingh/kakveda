@@ -290,7 +290,36 @@ An example compose file is provided in `docker-compose.prod.yml`.
 
 ---
 
-## 🖼️ Drawings
+## � Demo Screenshots
+
+### Login & Authentication
+| Login | Register | Forgot Password |
+|-------|----------|-----------------|
+| ![Login](docs/screenshots/login.png) | ![Register](docs/screenshots/register.png) | ![Forgot Password](docs/screenshots/forgot.png) |
+
+### Dashboard
+| Dashboard Overview | Dashboard Footer |
+|--------------------|------------------|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Dashboard Footer](docs/screenshots/dashboard_footer.png) |
+
+### Scenario Runner & Warnings
+| Scenarios | Run View | Warnings |
+|-----------|----------|----------|
+| ![Scenarios](docs/screenshots/scenarios.png) | ![Run](docs/screenshots/run.png) | ![Warnings](docs/screenshots/warnings.png) |
+
+### Advanced Features
+| Playground | Experiments | Datasets |
+|------------|-------------|----------|
+| ![Playground](docs/screenshots/playground.png) | ![Experiments](docs/screenshots/experiments.png) | ![Datasets](docs/screenshots/datasets.png) |
+
+### Admin Panel
+| Prompts | Admin RBAC |
+|---------|------------|
+| ![Prompts](docs/screenshots/prompts.png) | ![Admin RBAC](docs/screenshots/admin_rbac.png) |
+
+---
+
+## �🖼️ Drawings
 
 This repo includes clean, spec-friendly drawings under `docs/figures/`:
 
