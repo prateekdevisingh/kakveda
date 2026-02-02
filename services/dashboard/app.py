@@ -606,6 +606,85 @@ async def admin_root(user: dict[str, Any] | RedirectResponse = Depends(require_r
     return RedirectResponse(url="/admin/users", status_code=302)
 
 
+# ============================================================================
+# Public Agents Page (Top-level, accessible to all logged-in users)
+# ============================================================================
+
+@app.get("/agents", response_class=HTMLResponse)
+async def agents_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    message: str | None = None,
+    error: str | None = None,
+):
+    """Public agents page - shows all registered agents"""
+    if isinstance(user, RedirectResponse):
+        return user
+    
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    
+    with get_session() as s:
+        rows = s.query(AgentRegistry).filter(AgentRegistry.enabled == True).order_by(AgentRegistry.name).all()
+        agents = []
+        for a in rows:
+            caps = []
+            try:
+                caps = json.loads(a.capabilities_json or "[]")
+            except Exception:
+                pass
+            agents.append({
+                "id": a.id,
+                "name": a.name,
+                "description": a.description,
+                "base_url": a.base_url,
+                "enabled": a.enabled,
+                "capabilities": caps,
+                "updated_at": str(a.updated_at) if a.updated_at else None,
+            })
+    
+    return templates.TemplateResponse(
+        "agents.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "agents": agents,
+            "message": request.query_params.get("message") or message,
+            "error": request.query_params.get("error") or error,
+        },
+    )
+
+
+@app.post("/agents/{agent_id}/test")
+async def agents_test(
+    agent_id: int,
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    """Test agent health from public agents page"""
+    if isinstance(user, RedirectResponse):
+        return user
+    
+    with get_session() as s:
+        a = s.query(AgentRegistry).filter(AgentRegistry.id == agent_id).first()
+        if not a:
+            return RedirectResponse(url="/agents?error=Agent%20not%20found", status_code=303)
+        url = (a.base_url or "").rstrip("/")
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{url}/health")
+            code = r.status_code
+            if code == 200:
+                return RedirectResponse(url=f"/agents?message=Agent%20{a.name}%20is%20healthy%20(HTTP%20{code})", status_code=303)
+            else:
+                return RedirectResponse(url=f"/agents?error=Agent%20returned%20HTTP%20{code}", status_code=303)
+    except Exception as e:
+        return RedirectResponse(url=f"/agents?error=Connection%20failed:%20{str(e)[:50]}", status_code=303)
+
+
 @app.get("/admin/agents", response_class=HTMLResponse)
 async def admin_agents(request: Request, user: dict[str, Any] | RedirectResponse = Depends(require_roles([ROLE_ADMIN]))):
     if isinstance(user, RedirectResponse):
@@ -760,6 +839,83 @@ async def api_agents_list(request: Request):
     with get_session() as s:
         rows = s.query(AgentRegistry).order_by(AgentRegistry.id.desc()).all()
         return {"ok": True, "agents": [_agent_row(a) for a in rows]}
+
+
+@app.post("/api/agents/register")
+async def api_agents_self_register(request: Request):
+    """Agent self-registration API.
+    
+    Agents can call this endpoint to register themselves with Kakveda.
+    Body: {name, base_url, description?, capabilities?}
+    Header: X-API-Key for authentication
+    """
+    # Validate API key
+    auth = _require_project_api_key(request)
+    if not auth:
+        return {"ok": False, "error": "missing or invalid api key"}
+    
+    body = await request.json()
+    name = str(body.get("name") or "").strip()
+    base_url = str(body.get("base_url") or "").strip().rstrip("/")
+    description = str(body.get("description") or "").strip()
+    capabilities = body.get("capabilities") or []
+    
+    if not name:
+        return {"ok": False, "error": "name is required"}
+    if not base_url or not (base_url.startswith("http://") or base_url.startswith("https://")):
+        return {"ok": False, "error": "valid base_url is required"}
+    
+    if isinstance(capabilities, str):
+        capabilities = [c.strip() for c in capabilities.split(",") if c.strip()]
+    
+    with get_session() as s:
+        existing = s.query(AgentRegistry).filter(AgentRegistry.name == name).first()
+        if existing:
+            # Update existing agent
+            existing.base_url = base_url
+            existing.description = description or existing.description
+            existing.capabilities_json = json.dumps(capabilities)
+            existing.updated_at = utcnow()
+            agent_id = existing.id
+        else:
+            # Create new agent
+            agent = AgentRegistry(
+                name=name,
+                description=description or None,
+                base_url=base_url,
+                enabled=True,
+                capabilities_json=json.dumps(capabilities),
+                events_in_json="[]",
+                events_out_json="[]",
+                auth_type="none",
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+            s.add(agent)
+            s.flush()
+            agent_id = agent.id
+        s.commit()
+    
+    return {"ok": True, "agent_id": agent_id, "message": f"Agent '{name}' registered successfully"}
+
+
+@app.post("/api/agents/{agent_id}/heartbeat")
+async def api_agents_heartbeat(agent_id: int, request: Request):
+    """Agent heartbeat API.
+    
+    Agents should call this periodically to confirm they're alive.
+    """
+    auth = _require_project_api_key(request)
+    if not auth:
+        return {"ok": False, "error": "missing or invalid api key"}
+    
+    with get_session() as s:
+        agent = s.query(AgentRegistry).filter(AgentRegistry.id == agent_id).first()
+        if agent:
+            agent.updated_at = utcnow()
+            s.commit()
+            return {"ok": True, "message": "heartbeat received"}
+        return {"ok": False, "error": "agent not found"}
 
 
 async def ollama_generate(prompt: str) -> str:
@@ -2325,6 +2481,15 @@ async def playground_page(
                     "output": out_text,
                 }
 
+    # Get registered agents for dropdown
+    agents: list[dict] = []
+    try:
+        with get_session() as s:
+            agent_rows = s.query(AgentRegistry).filter(AgentRegistry.enabled == True).order_by(AgentRegistry.name).all()
+            agents = [{"id": a.id, "name": a.name, "base_url": a.base_url} for a in agent_rows]
+    except Exception:
+        agents = []
+
     return templates.TemplateResponse(
         "playground.html",
         {
@@ -2338,6 +2503,8 @@ async def playground_page(
             "prompt": prompt or "Explain what an agent is in 3 bullets.",
             "prompt_version_id": prompt_version_id,
             "experiments": experiments,
+            "agents": agents,
+            "selected_agent": None,
             "last": last,
         },
     )
@@ -2354,12 +2521,59 @@ async def playground_run(
     prompt_version_id: str | None = Form(None),
     experiment_id: str | None = Form(None),
     experiment_label: str | None = Form(None),
+    external_agent: str | None = Form(None),
 ):
     if isinstance(user, RedirectResponse):
         return user
 
     started = datetime.now(timezone.utc)
-    response_text, gen_meta = await ollama_generate_with_meta_model(prompt, model)
+    
+    # Check if external agent is selected
+    agent_name = None
+    if external_agent:
+        try:
+            ext_agent_id = int(external_agent)
+            with get_session() as s:
+                agent_row = s.query(AgentRegistry).filter(AgentRegistry.id == ext_agent_id, AgentRegistry.enabled == True).first()
+                if agent_row:
+                    agent_name = agent_row.name
+                    base_url = agent_row.base_url.rstrip("/")
+                    
+                    # Call external agent
+                    try:
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            # Try /api/ask endpoint (Kids Agent style)
+                            r = await client.post(
+                                f"{base_url}/api/ask",
+                                json={"question": prompt, "child_name": "Playground User"}
+                            )
+                            if r.status_code == 200:
+                                data = r.json()
+                                response_text = data.get("answer", str(data))
+                                gen_meta = {
+                                    "provider": "external_agent",
+                                    "model": agent_name,
+                                    "agent_url": base_url,
+                                    "content_rating": data.get("content_rating", ""),
+                                    "is_safe": data.get("is_safe", True),
+                                    "detected_topics": data.get("detected_topics", []),
+                                }
+                            else:
+                                response_text = f"Error: Agent returned {r.status_code}"
+                                gen_meta = {"provider": "external_agent", "model": agent_name, "error": r.text}
+                    except Exception as e:
+                        response_text = f"Error calling agent: {str(e)}"
+                        gen_meta = {"provider": "external_agent", "model": agent_name, "error": str(e)}
+                else:
+                    response_text = "Agent not found or disabled"
+                    gen_meta = {"provider": "external_agent", "error": "Agent not found"}
+        except Exception as e:
+            response_text = f"Invalid agent: {str(e)}"
+            gen_meta = {"provider": "external_agent", "error": str(e)}
+    else:
+        # Use direct model (original behavior)
+        response_text, gen_meta = await ollama_generate_with_meta_model(prompt, model)
+    
     ended = datetime.now(timezone.utc)
     duration_ms = int((ended - started).total_seconds() * 1000)
 

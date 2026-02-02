@@ -24,7 +24,7 @@
       {% endif %}
     </div>
     <div>
-      <a href="/">Dashboard</a> · <a href="/scenarios">Scenarios</a> · <a href="/runs">Runs</a> · <a href="/datasets">Datasets</a> · <a href="/warnings">Warnings</a> · <a href="/eval">Eval</a>
+      <a href="/">Dashboard</a> · <a href="/agents">Agents</a> · <a href="/scenarios">Scenarios</a> · <a href="/runs">Runs</a> · <a href="/datasets">Datasets</a> · <a href="/warnings">Warnings</a> · <a href="/eval">Eval</a>
       {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
     </div>
   </header>
@@ -48,9 +48,18 @@
           </div>
           <div>
             <div class="small">Model</div>
-            <select name="model" style="min-width:240px">
+            <select name="model" id="model-select" style="min-width:240px">
               {% for m in models %}
                 <option value="{{ m }}" {% if m == model %}selected{% endif %}>{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <div class="small">External Agent</div>
+            <select name="external_agent" id="agent-select" style="min-width:200px" onchange="toggleAgentMode()">
+              <option value="">(Use Model Directly)</option>
+              {% for a in agents %}
+                <option value="{{ a.id }}" {% if a.id == selected_agent %}selected{% endif %}>{{ a.name }}</option>
               {% endfor %}
             </select>
           </div>
@@ -84,10 +93,33 @@
       <h3>Last run</h3>
       <div class="small">Provider: <b>{{ last.provider }}</b> · Model: <b>{{ last.model }}</b> · Latency: <b>{{ last.latency_ms }}ms</b>
         {% if last.run_id %} · <a href="/runs/{{ last.run_id }}">Open Run</a>{% endif %}
+        {% if last.agent_name %} · Agent: <b>{{ last.agent_name }}</b>{% endif %}
       </div>
       <pre style="white-space:pre-wrap; margin-top:10px">{{ last.output }}</pre>
     </div>
     {% endif %}
   </div>
+
+  <script>
+    function toggleAgentMode() {
+      const agentSelect = document.getElementById('agent-select');
+      const modelSelect = document.getElementById('model-select');
+      const promptArea = document.querySelector('textarea[name="prompt"]');
+      
+      if (agentSelect.value) {
+        // External agent mode
+        modelSelect.disabled = true;
+        modelSelect.style.opacity = '0.5';
+        promptArea.placeholder = 'Enter your question for the agent...';
+      } else {
+        // Direct model mode
+        modelSelect.disabled = false;
+        modelSelect.style.opacity = '1';
+        promptArea.placeholder = 'Write a prompt...';
+      }
+    }
+    // Initialize on page load
+    toggleAgentMode();
+  </script>
 </body>
 </html>

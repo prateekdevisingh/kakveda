@@ -2,7 +2,6 @@ LICENSE
 NOTICE
 README.md
 pyproject.toml
-setup.py
 kakveda.egg-info/PKG-INFO
 kakveda.egg-info/SOURCES.txt
 kakveda.egg-info/dependency_links.txt

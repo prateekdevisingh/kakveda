@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kakveda - Agents</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; }
+    .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 16px; }
+    .agent-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: all 0.2s; }
+    .agent-card:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .agent-name { font-size: 1.2em; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    .agent-status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+    .agent-status.online { background: #22c55e; }
+    .agent-status.offline { background: #ef4444; }
+    .agent-desc { color: var(--muted); font-size: 0.9em; margin-bottom: 12px; }
+    .agent-meta { font-size: 0.85em; color: var(--muted); }
+    .agent-caps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .cap-tag { background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.3); padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
+    .agent-actions { margin-top: 14px; display: flex; gap: 8px; }
+    .btn-sm { padding: 6px 12px; font-size: 0.85em; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+    .btn-sm:hover { background: var(--accent); color: white; border-color: var(--accent); }
+    .btn-test { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: #22c55e; }
+    .btn-playground { background: rgba(37,99,235,0.15); border-color: rgba(37,99,235,0.4); color: #2563eb; }
+    .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+    .empty-state h3 { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>🤖 Agents</strong>
+      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+    </div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/agents">Agents</a> · <a href="/playground">Playground</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/warnings">Warnings</a>
+      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <h3>Registered Agents</h3>
+      <p class="small">External agents connected to Kakveda for monitoring and testing. Agents auto-register on startup or can be manually added via Admin Panel.</p>
+      
+      {% if agents %}
+      <div class="agent-grid">
+        {% for agent in agents %}
+        <div class="agent-card">
+          <div class="agent-name">
+            <span class="agent-status {{ 'online' if agent.enabled else 'offline' }}"></span>
+            {{ agent.name }}
+          </div>
+          <div class="agent-desc">{{ agent.description or 'No description' }}</div>
+          <div class="agent-meta">
+            <strong>URL:</strong> {{ agent.base_url }}<br>
+            <strong>Last Updated:</strong> {{ agent.updated_at[:19] if agent.updated_at else 'Unknown' }}
+          </div>
+          {% if agent.capabilities %}
+          <div class="agent-caps">
+            {% for cap in agent.capabilities %}
+            <span class="cap-tag">{{ cap }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <div class="agent-actions">
+            <a href="/playground?external_agent={{ agent.id }}" class="btn-sm btn-playground">🎮 Test in Playground</a>
+            <form action="/agents/{{ agent.id }}/test" method="post" style="display:inline">
+              {{ csrf_input(request) | safe }}
+              <button type="submit" class="btn-sm btn-test">❤️ Health Check</button>
+            </form>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <h3>No Agents Registered</h3>
+        <p>Agents will appear here when they connect to Kakveda.</p>
+        <p class="small">To register an agent, set <code>AUTO_REGISTER=true</code> and <code>DASHBOARD_API_KEY</code> in your agent.</p>
+      </div>
+      {% endif %}
+    </div>
+    
+    {% if message %}
+    <div class="card" style="margin-top: 14px; background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.3);">
+      <p style="margin: 0;">✅ {{ message }}</p>
+    </div>
+    {% endif %}
+    
+    {% if error %}
+    <div class="card" style="margin-top: 14px; background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.3);">
+      <p style="margin: 0;">❌ {{ error }}</p>
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

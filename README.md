@@ -175,7 +175,157 @@ kakveda version     # Show version info
 
 ---
 
-## 📧 SMTP for Password Reset
+## � Connect Your Own AI Agent to Kakveda
+
+Kakveda supports connecting external AI agents for centralized observability, tracing, and failure intelligence. Follow this step-by-step guide to integrate your custom agent.
+
+### Step 1: Start Kakveda Platform
+
+```bash
+git clone https://github.com/prateekdevisingh/kakveda.git
+cd kakveda/kakveda-v1.0
+docker-compose up -d
+```
+
+This starts the following services:
+
+| Service      | Port  | URL                        |
+|--------------|-------|----------------------------|
+| Event Bus    | 8100  | http://localhost:8100      |
+| Dashboard    | 8110  | http://localhost:8110      |
+| Ollama LLM   | 11434 | http://localhost:11434     |
+
+### Step 2: Verify Kakveda is Running
+
+```bash
+# Check all services
+docker ps
+
+# Check Dashboard
+curl http://localhost:8110
+```
+
+### Step 3: Find Docker Network Name
+
+```bash
+docker network ls | grep kakveda
+```
+
+Output example:
+```
+abc123   kakveda-v10_default   bridge   local
+```
+
+### Step 4: Download/Create Your Custom Agent
+
+Example using our Kids Education Agent:
+
+```bash
+cd ..
+git clone https://github.com/prateekdevisingh/kakveda-kids-agent.git
+cd kakveda-kids-agent
+```
+
+### Step 5: Build Agent Docker Image
+
+```bash
+docker build -t kakveda-kids .
+```
+
+### Step 6: Connect Agent to Kakveda Network
+
+```bash
+docker run -d \
+  --name kakveda-kids-agent \
+  --network kakveda-v10_default \
+  -p 8122:8120 \
+  -e OLLAMA_URL=http://ollama:11434 \
+  -e EVENT_BUS_URL=http://event-bus:8100 \
+  -e DASHBOARD_URL=http://dashboard:8110 \
+  -e DASHBOARD_API_KEY=your-api-key \
+  kakveda-kids
+```
+
+**Important Environment Variables:**
+
+| Variable         | Value                      | Description                                    |
+|------------------|----------------------------|------------------------------------------------|
+| `--network`      | `kakveda-v10_default`      | Kakveda's Docker network                       |
+| `OLLAMA_URL`     | `http://ollama:11434`      | LLM service (use service name, not localhost)  |
+| `EVENT_BUS_URL`  | `http://event-bus:8100`    | Traces go here for failure intelligence        |
+| `DASHBOARD_URL`  | `http://dashboard:8110`    | For agent auto-registration                    |
+| `DASHBOARD_API_KEY` | Your API key            | Get from Dashboard → Admin → API Keys          |
+
+### Step 7: Test Your Agent
+
+```bash
+# Health check
+curl http://localhost:8122/health
+
+# Ask a question
+curl -X POST http://localhost:8122/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "tell me about birds", "child_name": "Arya"}'
+```
+
+### Step 8: View Traces in Dashboard
+
+1. Open **http://localhost:8110**
+2. Go to **Runs** → See your agent's traces
+3. Go to **Agents** → See registered agents
+4. Go to **Playground** → Select your agent from dropdown and test
+
+### Agent Integration Requirements
+
+For your agent to fully integrate with Kakveda, implement these endpoints:
+
+| Endpoint        | Method | Purpose                           |
+|-----------------|--------|-----------------------------------|
+| `/health`       | GET    | Health check (return `{"status": "healthy"}`) |
+| `/api/ask`      | POST   | Main query endpoint               |
+
+**Send traces to Event Bus:**
+
+```python
+import httpx
+
+async def send_trace(question: str, answer: str, latency: float):
+    await httpx.AsyncClient().post(
+        f"{EVENT_BUS_URL}/publish",
+        json={
+            "event": {
+                "event_type": "trace.ingested",
+                "run_id": str(uuid.uuid4()),
+                "scenario_name": "your-agent-name",
+                "input": question,
+                "output": answer,
+                "latency_ms": latency,
+                "is_failure": False
+            }
+        }
+    )
+```
+
+**Auto-register with Dashboard (optional):**
+
+```python
+@app.on_event("startup")
+async def register_with_kakveda():
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{DASHBOARD_URL}/api/agents/register",
+            json={
+                "name": "your-agent-name",
+                "base_url": "http://your-agent:port",
+                "description": "Your agent description",
+                "capabilities": ["capability1", "capability2"]
+            }
+        )
+```
+
+---
+
+## �📧 SMTP for Password Reset
 
 To enable password reset emails, set these environment variables (in `.env`):
 
