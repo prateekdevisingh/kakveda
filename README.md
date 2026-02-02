@@ -234,6 +234,22 @@ docker build -t kakveda-kids .
 
 ### Step 6: Connect Agent to Kakveda Network
 
+**Generic Format:**
+
+```bash
+docker run -d \
+  --name <your-agent-name> \
+  --network <kakveda-docker-network> \
+  -p <host-port>:<container-port> \
+  -e OLLAMA_URL=http://ollama:11434 \
+  -e EVENT_BUS_URL=http://event-bus:8100 \
+  -e DASHBOARD_URL=http://dashboard:8110 \
+  -e DASHBOARD_API_KEY=<your-api-key> \
+  <your-docker-image>
+```
+
+**Example (Kids Education Agent):**
+
 ```bash
 docker run -d \
   --name kakveda-kids-agent \
@@ -246,15 +262,18 @@ docker run -d \
   kakveda-kids
 ```
 
-**Important Environment Variables:**
+**Parameter Reference:**
 
-| Variable         | Value                      | Description                                    |
-|------------------|----------------------------|------------------------------------------------|
-| `--network`      | `kakveda-v10_default`      | Kakveda's Docker network                       |
-| `OLLAMA_URL`     | `http://ollama:11434`      | LLM service (use service name, not localhost)  |
-| `EVENT_BUS_URL`  | `http://event-bus:8100`    | Traces go here for failure intelligence        |
-| `DASHBOARD_URL`  | `http://dashboard:8110`    | For agent auto-registration                    |
-| `DASHBOARD_API_KEY` | Your API key            | Get from Dashboard → Admin → API Keys          |
+| Parameter | Placeholder | Description |
+|-----------|-------------|-------------|
+| `--name` | `<your-agent-name>` | Unique name for your container |
+| `--network` | `<kakveda-docker-network>` | Kakveda's network (find via `docker network ls \| grep kakveda`) |
+| `-p` | `<host-port>:<container-port>` | Port mapping (e.g., `8122:8120`) |
+| `-e OLLAMA_URL` | `http://ollama:11434` | LLM service (use service name, not localhost) |
+| `-e EVENT_BUS_URL` | `http://event-bus:8100` | Traces go here for failure intelligence |
+| `-e DASHBOARD_URL` | `http://dashboard:8110` | For agent auto-registration |
+| `-e DASHBOARD_API_KEY` | `<your-api-key>` | Get from Dashboard → Admin → API Keys |
+| Image | `<your-docker-image>` | Your built Docker image name |
 
 ### Step 7: Test Your Agent
 
