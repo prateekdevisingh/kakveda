@@ -4,18 +4,23 @@ Author: **Prateek Chaudhary**
 
 Website: **https://kakveda.com**
 
-> **Open‑source, event‑driven platform that gives LLM systems a memory of fai## 📚 Docs
-
-- `docs/architecture.md` — architecture and event flow
-- `docs/concepts.md` — core concepts (failures, patterns, fingerprints)
-- `docs/failure-intelligence.md` — what "failure intelligence" means and how Kakveda implements it
-- **[docs/COMPARISON.md](docs/COMPARISON.md)** — Kakveda vs Datadog, LangSmith, MLflow, AppDynamics, Arize AI (feature comparison)
-- `docs/COMPARISON.md` — **Kakveda vs Datadog, LangSmith, MLflow, AppDynamics, Arize AI** (feature comparison)
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — common issues and solutions, runtime “this failed before” warnings, and a system‑level health view.**
+> **Open‑source, event‑driven platform that gives LLM systems a memory of failures, runtime "this failed before" warnings, and a system‑level health view.**
 
 Kakveda sits *around* LLM runtimes and observability tools and adds something most systems lack: **failure memory**. Instead of treating failures as logs, it treats them as first‑class entities that can be remembered, matched, warned against, and analyzed over time.
 
 This repository provides a **complete, production‑adjacent, single‑node implementation** designed for local use, demos, and learning — with a clear path to future enterprise extensions.
+
+---
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[docs/architecture.md](docs/architecture.md)** | Architecture and event flow |
+| **[docs/concepts.md](docs/concepts.md)** | Core concepts (failures, patterns, fingerprints) |
+| **[docs/failure-intelligence.md](docs/failure-intelligence.md)** | What "failure intelligence" means |
+| **[docs/COMPARISON.md](docs/COMPARISON.md)** | Kakveda vs Datadog, LangSmith, MLflow, etc. |
+| **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** | Common issues and solutions |
 
 ---
 
@@ -79,7 +84,7 @@ Trace Ingestion ──▶ Event Bus ──▶ Failure Classifier
 | **gfkb**               | Global Failure Knowledge Base (failures + patterns) |
 | **failure-classifier** | Detects failures from traces                        |
 | **pattern-detector**   | Maintains recurring failure patterns                |
-| **warning-policy**     | Pre‑flight “this failed before” warnings            |
+| **warning-policy**     | Pre‑flight "this failed before" warnings            |
 | **health-scoring**     | Computes health timeline                            |
 | **dashboard**          | UI, auth, RBAC, analytics, scenario runner          |
 | **ollama (optional)**  | Local LLM runtime                                   |
@@ -167,8 +172,8 @@ kakveda version     # Show version info
 ### Demo Accounts (auto‑created)
 
 * **admin@local / admin123** (admin)
-* **[operator@kakveda.local](mailto:operator@kakveda.local) / Operator@123** (operator)
-* **[viewer@kakveda.local](mailto:viewer@kakveda.local) / Viewer@123** (viewer)
+* **operator@kakveda.local / Operator@123** (operator)
+* **viewer@kakveda.local / Viewer@123** (viewer)
 
 > ⚠️ **Security warning:**
 > - The default admin (`admin@local` / `admin123`) is for first-time setup only.
@@ -177,7 +182,7 @@ kakveda version     # Show version info
 
 ---
 
-## � Connect Your Own AI Agent to Kakveda
+## 🔌 Connect Your Own AI Agent to Kakveda
 
 Kakveda supports connecting external AI agents for centralized observability, tracing, and failure intelligence. Follow this step-by-step guide to integrate your custom agent.
 
@@ -346,7 +351,7 @@ async def register_with_kakveda():
 
 ---
 
-## �📧 SMTP for Password Reset
+## 📧 SMTP for Password Reset
 
 To enable password reset emails, set these environment variables (in `.env`):
 
@@ -360,14 +365,6 @@ SMTP_TLS=true
 ```
 
 If SMTP is not set, password reset links will be shown in the UI (for dev/testing only).
-
----
-
-## 📚 Docs
-
-- `docs/architecture.md` — architecture and event flow
-- `docs/concepts.md` — core concepts (failures, patterns, fingerprints)
-- `docs/failure-intelligence.md` — what “failure intelligence” means and how Kakveda implements it
 
 ---
 
@@ -459,9 +456,21 @@ An example compose file is provided in `docker-compose.prod.yml`.
 
 ## 🧪 What this repo is (and is not)
 
+**This repo IS:**
+
+* A complete, runnable system
+* Suitable for learning, experimentation, and local use
+* A reference architecture for failure‑intelligent LLM systems
+
+**This repo is NOT:**
+
+* A fully hardened enterprise deployment
+* A multi‑cluster or HA setup
+* A compliance‑certified system
+
 ---
 
-## � Demo Screenshots
+## 📸 Demo Screenshots
 
 ### Login & Authentication
 | Login | Register | Forgot Password |
@@ -490,7 +499,7 @@ An example compose file is provided in `docker-compose.prod.yml`.
 
 ---
 
-## �🖼️ Drawings
+## 🖼️ Drawings
 
 This repo includes clean, spec-friendly drawings under `docs/figures/`:
 
@@ -505,19 +514,6 @@ This repo includes clean, spec-friendly drawings under `docs/figures/`:
 **Fig. 3 — Pre-flight matching and policy decision flow**
 
 ![Fig. 3 — Pre-flight matching and policy decision flow](docs/figures/fig3_preflight_policy_flow.svg)
-
-**This repo IS:**
-
-* A complete, runnable system
-* Suitable for learning, experimentation, and local use
-* A reference architecture for failure‑intelligent LLM systems
-
-**This repo is NOT:**
-
-* A fully hardened enterprise deployment
-* A multi‑cluster or HA setup
-* A compliance‑certified system
-
 
 ---
 
@@ -560,6 +556,6 @@ The open-source core is designed to remain transparent, usable, and self-hostabl
 Intellectual Property Note: The project is released as open source. 
 Certain aspects of the underlying concepts may be the subject of patent filings.
 
+---
 
 Copyright 2026 Prateek Chaudhary
-
