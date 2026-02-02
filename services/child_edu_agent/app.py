@@ -21,7 +21,9 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 
 import httpx
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # Configure logging
@@ -33,6 +35,9 @@ app = FastAPI(
     description="Safe educational Q&A for 3+ year children with parental alerts",
     version="0.1.0"
 )
+
+# Get template directory
+TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 # ============================================================================
 # Configuration
@@ -347,20 +352,50 @@ async def report_to_kakveda(
 # API Endpoints
 # ============================================================================
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
+    """Serve the Kids UI"""
+    try:
+        template_path = os.path.join(TEMPLATE_DIR, "index.html")
+        if os.path.exists(template_path):
+            with open(template_path, "r") as f:
+                return HTMLResponse(content=f.read())
+    except Exception as e:
+        logger.error(f"Failed to load template: {e}")
+    
+    # Fallback JSON response
+    return HTMLResponse(content="""
+    <html>
+    <head><title>Kakveda Kids</title></head>
+    <body style="font-family: Comic Sans MS; text-align: center; padding: 50px; background: linear-gradient(135deg, #667eea, #764ba2);">
+        <h1 style="color: white;">🎒 Kakveda Kids</h1>
+        <p style="color: white;">Child Education Agent is running!</p>
+        <p style="color: white;">Use POST /api/ask to ask questions.</p>
+    </body>
+    </html>
+    """)
+
+@app.get("/api")
+async def api_info():
+    """API info endpoint"""
     return {
         "service": "Child Education Agent",
         "version": "0.1.0",
         "status": "running",
-        "description": "Safe educational Q&A for 3+ year children"
+        "description": "Safe educational Q&A for 3+ year children",
+        "endpoints": {
+            "ui": "/",
+            "ask": "/api/ask",
+            "topics": "/api/topics",
+            "health": "/health"
+        }
     }
 
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
 
-@app.post("/ask", response_model=AnswerResponse)
+@app.post("/api/ask", response_model=AnswerResponse)
 async def ask_question(
     request: QuestionRequest,
     background_tasks: BackgroundTasks
@@ -437,7 +472,16 @@ async def ask_question(
         alert_sent=alert_sent
     )
 
-@app.get("/topics")
+# Keep old endpoint for backward compatibility
+@app.post("/ask", response_model=AnswerResponse)
+async def ask_question_legacy(
+    request: QuestionRequest,
+    background_tasks: BackgroundTasks
+):
+    """Legacy endpoint - redirects to /api/ask"""
+    return await ask_question(request, background_tasks)
+
+@app.get("/api/topics")
 async def get_allowed_topics():
     """Get list of allowed educational topics"""
     return {
@@ -445,11 +489,21 @@ async def get_allowed_topics():
         "description": "These are age-appropriate topics for 3+ year children"
     }
 
-@app.post("/analyze")
+@app.get("/topics")
+async def get_topics_legacy():
+    """Legacy endpoint"""
+    return await get_allowed_topics()
+
+@app.post("/api/analyze")
 async def analyze_content(text: str):
     """Analyze text for content safety (for testing)"""
     analysis = safety_analyzer.analyze(text)
     return asdict(analysis)
+
+@app.post("/analyze")
+async def analyze_content_legacy(text: str):
+    """Legacy endpoint"""
+    return await analyze_content(text)
 
 # ============================================================================
 # Main

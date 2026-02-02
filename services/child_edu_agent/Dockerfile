@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir \
 # Copy application
 COPY services/child_edu_agent/app.py .
 COPY services/child_edu_agent/__init__.py .
+COPY services/child_edu_agent/templates ./templates/
 
 # Expose port
 EXPOSE 8120

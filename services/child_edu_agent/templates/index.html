@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎒 Kakveda Kids - Learn & Play!</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Comic Sans MS', 'Chalkboard', cursive;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 20px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            color: #ff6b6b;
+            text-shadow: 3px 3px 0 #ffd93d;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            color: #6c5ce7;
+            margin-top: 10px;
+        }
+
+        /* Floating emojis animation */
+        .floating-emojis {
+            position: fixed;
+            font-size: 2em;
+            animation: float 6s ease-in-out infinite;
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-20px) rotate(10deg); }
+        }
+
+        /* Child name input */
+        .name-section {
+            background: rgba(255,255,255,0.95);
+            border-radius: 25px;
+            padding: 25px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+
+        .name-section label {
+            font-size: 1.3em;
+            color: #e17055;
+            display: block;
+            margin-bottom: 15px;
+        }
+
+        .name-section input {
+            font-size: 1.5em;
+            padding: 15px 25px;
+            border: 4px solid #74b9ff;
+            border-radius: 20px;
+            width: 80%;
+            max-width: 300px;
+            text-align: center;
+            font-family: inherit;
+            color: #2d3436;
+            background: #fff9e6;
+        }
+
+        .name-section input:focus {
+            outline: none;
+            border-color: #ff6b6b;
+            box-shadow: 0 0 20px rgba(255,107,107,0.3);
+        }
+
+        /* Chat area */
+        .chat-area {
+            background: rgba(255,255,255,0.95);
+            border-radius: 30px;
+            padding: 25px;
+            margin-bottom: 20px;
+            min-height: 300px;
+            max-height: 400px;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+
+        .message {
+            padding: 15px 20px;
+            border-radius: 20px;
+            margin-bottom: 15px;
+            animation: popIn 0.3s ease;
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .message.child {
+            background: linear-gradient(135deg, #74b9ff, #0984e3);
+            color: white;
+            margin-left: 20%;
+            text-align: right;
+            font-size: 1.2em;
+        }
+
+        .message.teacher {
+            background: linear-gradient(135deg, #ffeaa7, #fdcb6e);
+            color: #2d3436;
+            margin-right: 20%;
+            font-size: 1.2em;
+            border: 3px solid #f39c12;
+        }
+
+        .message.blocked {
+            background: linear-gradient(135deg, #fab1a0, #e17055);
+            border: 3px solid #d63031;
+        }
+
+        .message .emoji {
+            font-size: 1.5em;
+            margin-right: 10px;
+        }
+
+        /* Question input */
+        .question-section {
+            background: rgba(255,255,255,0.95);
+            border-radius: 30px;
+            padding: 25px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+
+        .question-section label {
+            font-size: 1.3em;
+            color: #00b894;
+            display: block;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .question-section input {
+            flex: 1;
+            min-width: 250px;
+            font-size: 1.3em;
+            padding: 18px 25px;
+            border: 4px solid #00b894;
+            border-radius: 25px;
+            font-family: inherit;
+            background: #e8f8f5;
+        }
+
+        .question-section input:focus {
+            outline: none;
+            border-color: #ff6b6b;
+            box-shadow: 0 0 20px rgba(0,184,148,0.3);
+        }
+
+        .ask-btn {
+            font-size: 1.3em;
+            padding: 18px 35px;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            box-shadow: 0 5px 20px rgba(238,90,36,0.4);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .ask-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(238,90,36,0.5);
+        }
+
+        .ask-btn:active {
+            transform: translateY(0);
+        }
+
+        .ask-btn:disabled {
+            background: #b2bec3;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Topic buttons */
+        .topics-section {
+            background: rgba(255,255,255,0.95);
+            border-radius: 25px;
+            padding: 20px;
+            margin-top: 20px;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+        }
+
+        .topics-section h3 {
+            text-align: center;
+            color: #6c5ce7;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        .topic-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .topic-btn {
+            padding: 12px 20px;
+            font-size: 1em;
+            border: 3px solid;
+            border-radius: 20px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: transform 0.2s;
+            background: white;
+        }
+
+        .topic-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .topic-btn.animals { border-color: #e17055; color: #e17055; }
+        .topic-btn.colors { border-color: #6c5ce7; color: #6c5ce7; }
+        .topic-btn.numbers { border-color: #00b894; color: #00b894; }
+        .topic-btn.alphabet { border-color: #fdcb6e; color: #e17055; }
+        .topic-btn.nature { border-color: #00cec9; color: #00cec9; }
+        .topic-btn.family { border-color: #ff7675; color: #ff7675; }
+
+        /* Loading animation */
+        .loading {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.5em;
+            color: #6c5ce7;
+        }
+
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s infinite;
+        }
+
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: white;
+            font-size: 0.9em;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .header h1 { font-size: 1.8em; }
+            .message { margin-left: 5% !important; margin-right: 5% !important; }
+            .input-group { flex-direction: column; }
+            .question-section input { min-width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Floating emojis -->
+    <div class="floating-emojis" style="top: 10%; left: 5%;">🌈</div>
+    <div class="floating-emojis" style="top: 20%; right: 8%; animation-delay: 1s;">⭐</div>
+    <div class="floating-emojis" style="top: 60%; left: 3%; animation-delay: 2s;">🦋</div>
+    <div class="floating-emojis" style="top: 70%; right: 5%; animation-delay: 0.5s;">🌻</div>
+    <div class="floating-emojis" style="top: 40%; right: 2%; animation-delay: 1.5s;">🎈</div>
+
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🎒 Kakveda Kids</h1>
+            <p>Ask me anything! I love to teach and play! 🌟</p>
+        </div>
+
+        <!-- Name input -->
+        <div class="name-section">
+            <label>👋 What's your name, little friend?</label>
+            <input type="text" id="childName" placeholder="Type your name..." value="Little Star">
+        </div>
+
+        <!-- Chat area -->
+        <div class="chat-area" id="chatArea">
+            <div class="message teacher">
+                <span class="emoji">🌟</span>
+                Hello! I'm your friendly teacher! Ask me anything about animals, colors, numbers, or anything you want to learn! 🎉
+            </div>
+        </div>
+
+        <!-- Question input -->
+        <div class="question-section">
+            <label>🤔 What do you want to know?</label>
+            <div class="input-group">
+                <input type="text" id="questionInput" placeholder="Ask me anything..." onkeypress="handleKeyPress(event)">
+                <button class="ask-btn" id="askBtn" onclick="askQuestion()">
+                    Ask! 🚀
+                </button>
+            </div>
+        </div>
+
+        <!-- Quick topic buttons -->
+        <div class="topics-section">
+            <h3>🎯 Quick Questions!</h3>
+            <div class="topic-buttons">
+                <button class="topic-btn animals" onclick="askTopic('Tell me about cats and dogs!')">🐱 Animals</button>
+                <button class="topic-btn colors" onclick="askTopic('What are the colors of the rainbow?')">🌈 Colors</button>
+                <button class="topic-btn numbers" onclick="askTopic('Can you teach me counting?')">🔢 Numbers</button>
+                <button class="topic-btn alphabet" onclick="askTopic('Teach me ABC alphabet!')">📚 ABC</button>
+                <button class="topic-btn nature" onclick="askTopic('Why does it rain?')">🌧️ Weather</button>
+                <button class="topic-btn family" onclick="askTopic('Tell me about family!')">👨‍👩‍👧 Family</button>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>Made with ❤️ by Kakveda · Safe Learning for Kids</p>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = '/api/ask';  // Will be proxied to backend
+        
+        function getChildName() {
+            return document.getElementById('childName').value || 'Little Star';
+        }
+
+        function addMessage(text, type) {
+            const chatArea = document.getElementById('chatArea');
+            const message = document.createElement('div');
+            message.className = `message ${type}`;
+            
+            if (type === 'teacher') {
+                message.innerHTML = `<span class="emoji">🌟</span>${text}`;
+            } else {
+                message.textContent = text;
+            }
+            
+            chatArea.appendChild(message);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function addLoading() {
+            const chatArea = document.getElementById('chatArea');
+            const loading = document.createElement('div');
+            loading.className = 'loading';
+            loading.id = 'loadingMsg';
+            loading.textContent = 'Thinking';
+            chatArea.appendChild(loading);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function removeLoading() {
+            const loading = document.getElementById('loadingMsg');
+            if (loading) loading.remove();
+        }
+
+        async function askQuestion() {
+            const input = document.getElementById('questionInput');
+            const question = input.value.trim();
+            const btn = document.getElementById('askBtn');
+            
+            if (!question) return;
+            
+            // Add child's question
+            addMessage(question, 'child');
+            input.value = '';
+            btn.disabled = true;
+            
+            // Show loading
+            addLoading();
+            
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        child_name: getChildName(),
+                        child_age: 4
+                    })
+                });
+                
+                const data = await response.json();
+                removeLoading();
+                
+                if (data.is_safe) {
+                    addMessage(data.answer, 'teacher');
+                } else {
+                    addMessage(data.answer, 'teacher blocked');
+                }
+                
+            } catch (error) {
+                removeLoading();
+                addMessage("Oops! Something went wrong. Let's try again! 🌈", 'teacher');
+                console.error('Error:', error);
+            }
+            
+            btn.disabled = false;
+        }
+
+        function askTopic(question) {
+            document.getElementById('questionInput').value = question;
+            askQuestion();
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                askQuestion();
+            }
+        }
+
+        // Welcome message with child's name
+        document.getElementById('childName').addEventListener('change', function() {
+            const name = this.value || 'Little Star';
+            addMessage(`Hi ${name}! 🎉 I'm so happy to meet you! What would you like to learn today?`, 'teacher');
+        });
+    </script>
+</body>
+</html>
