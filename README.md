@@ -9,6 +9,8 @@ Website: **https://kakveda.com**
 - `docs/architecture.md` — architecture and event flow
 - `docs/concepts.md` — core concepts (failures, patterns, fingerprints)
 - `docs/failure-intelligence.md` — what "failure intelligence" means and how Kakveda implements it
+- **[docs/COMPARISON.md](docs/COMPARISON.md)** — Kakveda vs Datadog, LangSmith, MLflow, AppDynamics, Arize AI (feature comparison)
+- `docs/COMPARISON.md` — **Kakveda vs Datadog, LangSmith, MLflow, AppDynamics, Arize AI** (feature comparison)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — common issues and solutions, runtime “this failed before” warnings, and a system‑level health view.**
 
 Kakveda sits *around* LLM runtimes and observability tools and adds something most systems lack: **failure memory**. Instead of treating failures as logs, it treats them as first‑class entities that can be remembered, matched, warned against, and analyzed over time.
