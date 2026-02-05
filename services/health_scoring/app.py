@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Deque, Dict
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 
 from services.shared.config import ConfigStore
 from services.shared.models import HealthPoint, Severity
@@ -79,6 +79,12 @@ async def on_failure(event: dict):
         counts[str(x.get("failure_type"))] += 1
     recurrent_penalty = sum(max(0, c - 1) for c in counts.values()) * 2.5
 
+    last_failure_type = None
+    last_severity = None
+    if window:
+        last_failure_type = window[-1].get("failure_type")
+        last_severity = window[-1].get("severity")
+
     # recovery time is not measured in this demo; keep as placeholder
     avg_recovery = 30.0 + 10.0 * recurrent_penalty
 
@@ -90,21 +96,35 @@ async def on_failure(event: dict):
         failure_rate=failure_rate,
         recurrent_penalty=recurrent_penalty,
         avg_recovery_time_sec=avg_recovery,
-        notes={"window_failures": n, "weighted": weighted, "top_failure": max(counts, key=counts.get) if counts else None},
+        notes={
+            "window_failures": n,
+            "weighted": weighted,
+            "top_failure": max(counts, key=counts.get) if counts else None,
+            "last_failure": last_failure_type,
+            "last_severity": last_severity,
+        },
     )
     _append(point)
     return {"ok": True, "health": point.model_dump()}
 
 
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
 @app.get("/health/{app_id}")
-def get_health(app_id: str):
+def get_health(app_id: str, limit: int = Query(50, ge=1, le=500)):
     if not HEALTH_FILE.exists():
         return {"app_id": app_id, "points": []}
     pts = []
     for line in HEALTH_FILE.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        obj = json.loads(line)
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
         if obj.get("app_id") == app_id:
             pts.append(obj)
-    return {"app_id": app_id, "points": pts[-50:]}
+    return {"app_id": app_id, "points": pts[-limit:]}

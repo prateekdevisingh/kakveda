@@ -7,6 +7,9 @@
 > The goal of this comparison is to explain **Kakveda’s design focus and scope**
 > rather than to rank, market, or competitively position products.
 
+> Additional note: the **Kakveda** column reflects what is implemented in this repository.
+> Other columns are **indicative** and should be treated as a snapshot.
+
 ---
 
 ## Overview
@@ -39,6 +42,33 @@ clarify where it fits and how it can be complementary.
 
 ## High-Level Capability Comparison
 
+### Quick comparison (indicative)
+
+| Capability / Feature | Kakveda | LangSmith | MLflow | Arize AI | Weights & Biases | APM (Datadog/AppD) |
+|---|---|---|---|---|---|---|
+| Open Source | ✅ Yes (Apache 2.0) | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| Self-hosted | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ⚠️ Limited | ❌ No |
+| Playground | ✅ Yes | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No |
+| Scenario Runner | ✅ Yes | ⚠️ Partial | ❌ No | ❌ No | ❌ No | ❌ No |
+| LLM Tracing | ✅ Yes | ✅ Yes | ⚠️ Limited | ✅ Yes | ✅ Yes | ⚠️ Infra only |
+| Nested Spans | ⚠️ Partial | ✅ Yes | ❌ No | ⚠️ Limited | ⚠️ Limited | ✅ Yes |
+| Failure Detection (Auto) | ✅ Yes | ❌ No | ❌ No | ⚠️ Anomaly | ❌ No | ❌ No |
+| Failure Knowledge Base (Memory) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| Pre-flight Warnings | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| Failure Pattern Detection | ✅ Yes | ❌ No | ❌ No | ⚠️ Drift only | ❌ No | ❌ No |
+| Drift Detection | ❌ No (not yet) | ❌ No | ⚠️ Data drift | ✅ Yes | ⚠️ Limited | ❌ No |
+| Health Score Over Time | ✅ Yes | ❌ No | ❌ No | ✅ Yes | ❌ No | ✅ Infra only |
+| Warnings Dashboard + Filters | ✅ Yes | ❌ No | ❌ No | ⚠️ Alerts | ❌ No | ⚠️ Alerts |
+| Agents / Agent Runs | ✅ Native | ⚠️ Partial | ❌ No | ❌ No | ❌ No | ❌ No |
+| Auto-Detection Agents | ⚠️ Partial | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| Datasets & Examples | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
+| Evaluations | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
+| Projects / Workspaces | ✅ Yes | ⚠️ Limited | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Yes |
+| API Keys | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| Admin Panel | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
+| RBAC | ✅ Yes | ⚠️ Limited | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Yes |
+| Service-Friendly (White-label) | ⚠️ Partial | ❌ No | ⚠️ Limited | ❌ No | ❌ No | ❌ No |
+
 ### Failure-Oriented Capabilities
 
 | Capability | Kakveda | Datadog / AppDynamics | LangSmith | Arize AI | MLflow | W&B |
@@ -56,9 +86,12 @@ clarify where it fits and how it can be complementary.
 | Feature | Kakveda | Datadog | LangSmith | Arize AI | MLflow |
 |-------|---------|---------|-----------|----------|--------|
 | Trace ingestion | Yes | Yes | Yes | Yes | Yes |
-| Nested spans | Yes | Yes | Yes | Yes | Limited |
+| Nested spans | Partial | Yes | Yes | Yes | Limited |
 | Latency tracking | Yes | Yes | Yes | Yes | Yes |
 | Token / cost signals | Yes | Partial | Yes | Yes | Limited |
+
+**Note on drift:** Kakveda’s current implementation focuses on failure memory, warnings, patterns, and health timelines.
+First-class **drift detection** (data/behavior drift monitors, baselines, alerts) is not yet a dedicated Kakveda capability in this repository.
 
 ---
 

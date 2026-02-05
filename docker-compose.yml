@@ -88,6 +88,13 @@ services:
       dockerfile: services/health_scoring/Dockerfile
     ports:
       - "8106:8106"
+    environment:
+      - EVENT_BUS_URL=http://event-bus:8100
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    depends_on:
+      - event-bus
 
   dashboard:
     build:
@@ -116,6 +123,7 @@ services:
       - gfkb
       - health-scoring
       - ollama
+      - event-bus
     ports:
       - "8110:8110"
     volumes:
@@ -128,6 +136,26 @@ services:
       dockerfile: services/agent_echo/Dockerfile
     environment:
       - AGENT_NAME=agent-echo
+    ports:
+      - "8122:8120"
+
+  kakveda-kids-agent:
+    build:
+      context: ../kakveda-kids-agent
+      dockerfile: Dockerfile
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - EVENT_BUS_URL=http://event-bus:8100
+      - DASHBOARD_URL=http://dashboard:8110
+      - AGENT_NAME=kakveda-kids-agent
+      - AGENT_BASE_URL=http://kakveda-kids-agent:8120
+      - AUTO_REGISTER=${AUTO_REGISTER:-true}
+      - DASHBOARD_API_KEY=${DASHBOARD_API_KEY:-}
+      - KAKVEDA_E2E_EMIT_CITATION_HALLUCINATION=${KAKVEDA_E2E_EMIT_CITATION_HALLUCINATION:-0}
+    depends_on:
+      - event-bus
+      - dashboard
+      - ollama
     ports:
       - "8120:8120"
 

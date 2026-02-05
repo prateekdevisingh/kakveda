@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Admin - Purge Demo Apps</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .wrap { padding: 24px; max-width: 1100px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-top: 16px; }
+    code { background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); padding: 1px 6px; border-radius: 6px; }
+    @media (max-width: 900px) { .wrap { padding: 16px; } header { flex-direction: column; gap: 12px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      <span class="pill">Admin</span>
+      <span class="pill">Purge Demo Apps</span>
+    </div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/health">Health</a>
+      <a href="/agents">Agents</a>
+      <a href="/runs">Runs</a>
+      <a href="/admin/users" class="active">Admin</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if message %}
+    <div class="card" style="border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08);">
+      <div class="small" style="color:#86efac;"><strong>OK:</strong> {{ message }}</div>
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="card" style="border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08);">
+      <div class="small" style="color:#fca5a5;"><strong>Error:</strong> {{ error }}</div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h2 style="margin-top:0;">Purge demo data for apps</h2>
+      <div class="row" style="margin-bottom:10px;">
+        {% for a in (apps or []) %}
+          <span class="pill">{{ a }}</span>
+        {% endfor %}
+      </div>
+      <div class="small" style="margin-bottom:12px;">
+        This permanently removes demo data from <code>/app/data/dashboard.db</code>, <code>health.jsonl</code>, <code>failures.jsonl</code>, and <code>patterns.jsonl</code>.
+        It does <strong>not</strong> delete kids-app data.
+      </div>
+      <div class="small" style="margin-bottom:12px;">
+        Safety: creates timestamped backups next to each file (e.g. <code>dashboard.db.bak-YYYYMMDDTHHMMSSZ</code>).
+      </div>
+
+      <form method="post" action="/admin/purge-demo/run" class="row">
+        {{ csrf_input(request) | safe }}
+        <button class="btn" type="submit" style="background: rgba(239,68,68,0.25); border-color: rgba(239,68,68,0.55);">
+          Purge Demo Apps Now
+        </button>
+        <a class="btn secondary" href="/" style="padding:8px 14px; font-size:0.9em;">Back to Dashboard</a>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Notes</h3>
+      <ul class="small" style="margin:0; padding-left:18px;">
+        <li>Failures/patterns entries are kept if they still affect a non-demo app after removing demo apps.</li>
+        <li>If a failure/pattern only affected demo apps, it will be dropped.</li>
+        <li>Health points are removed by matching <code>app_id</code>.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

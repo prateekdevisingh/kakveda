@@ -5,6 +5,7 @@
   <title>Kakveda - LLM Failure Intelligence Platform</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
     .brand { display: flex; gap: 12px; align-items: center; }
@@ -75,7 +76,7 @@
       <div class="stat-item"><div class="stat-value">{{ failures|length }}</div><div class="stat-label">Failures</div></div>
       <div class="stat-item"><div class="stat-value">{{ patterns|length }}</div><div class="stat-label">Patterns</div></div>
       <div class="stat-item"><div class="stat-value">{{ warnings|length }}</div><div class="stat-label">Warnings</div></div>
-      <div class="stat-item"><div class="stat-value">--</div><div class="stat-label">Health</div></div>
+      <div class="stat-item"><div class="stat-value">{% if latest_health_score is not none %}{{ latest_health_score|round(0)|int }}{% else %}--{% endif %}</div><div class="stat-label">Health</div></div>
     </div>
   </div>
 
@@ -120,7 +121,21 @@
     </div>
 
     <div class="card full">
-      <h3>Health Score Trend</h3>
+      <div class="row" style="justify-content:space-between; margin-bottom:12px;">
+        <h3 style="margin:0">
+          Health Score Trend
+          <a class="pill pill-link" href="/health?app_id={{ health_app_id }}" title="Open health details">{{ health_app_id }}</a>
+        </h3>
+        <div class="row">
+          <label class="small" for="healthAppSelect">App</label>
+          <select id="healthAppSelect" class="btn secondary" style="padding:6px 10px;">
+            {% for a in (health_app_choices or []) %}
+              <option value="{{ a }}" {% if a == health_app_id %}selected{% endif %}>{{ a }}</option>
+            {% endfor %}
+          </select>
+          <a class="btn secondary" href="/health?app_id={{ health_app_id }}" style="padding:6px 14px; font-size:0.85em;">Details</a>
+        </div>
+      </div>
       <canvas id="healthChart" height="80"></canvas>
     </div>
 
@@ -152,11 +167,24 @@
   <script>
     var points = {{ health_points | tojson }};
     var ctx = document.getElementById('healthChart');
+    var appSelect = document.getElementById('healthAppSelect');
+    if (appSelect) {
+      appSelect.addEventListener('change', function(){
+        var v = appSelect.value || 'app-A';
+        window.location = '/?app_id=' + encodeURIComponent(v);
+      });
+    }
     if (window.Chart && points.length) {
-      new Chart(ctx, {
+      var chart = new Chart(ctx, {
         type: 'line',
         data: { labels: points.map(function(p){return p.ts;}), datasets: [{ label: 'Health', data: points.map(function(p){return p.score;}), borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.15)', tension: 0.3, fill: true }] },
         options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#9aa8bf' } }, y: { min: 0, max: 100, ticks: { color: '#9aa8bf' } } } }
+      });
+
+      // Make chart clickable to open details.
+      ctx.style.cursor = 'pointer';
+      ctx.addEventListener('click', function(){
+        window.location = '/health?app_id={{ health_app_id }}';
       });
     }
   </script>

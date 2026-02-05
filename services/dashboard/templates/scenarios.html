@@ -43,8 +43,9 @@
           <div>
             <label>App</label>
             <select name="app_id">
-              <option value="app-A">app-A</option>
-              <option value="app-B">app-B</option>
+              {% for a in app_choices %}
+                <option value="{{ a }}">{{ a }}</option>
+              {% endfor %}
             </select>
           </div>
           <div>

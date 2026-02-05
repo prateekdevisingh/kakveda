@@ -24,6 +24,23 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 
 ---
 
+## 🔎 Basic comparison (highlights)
+
+> Note: Highlights only. For the full matrix, see [docs/COMPARISON.md](docs/COMPARISON.md).
+
+| Capability / Feature | Kakveda | LangSmith | MLflow | Arize AI | Weights & Biases | APM (Datadog/AppD) |
+|---|---|---|---|---|---|---|
+| Open Source | ✅ Yes (Apache 2.0) | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| Self-hosted | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ⚠️ Limited | ❌ No |
+| Playground | ✅ Yes | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No |
+| LLM Tracing | ✅ Yes | ✅ Yes | ⚠️ Limited | ✅ Yes | ✅ Yes | ⚠️ Infra only |
+| Failure Knowledge Base (Memory) | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| Pre-flight Warnings | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
+| Health Score Over Time | ✅ Yes | ❌ No | ❌ No | ✅ Yes | ❌ No | ✅ Infra only |
+| Warnings Dashboard + Filters | ✅ Yes | ❌ No | ❌ No | ⚠️ Alerts | ❌ No | ⚠️ Alerts |
+
+---
+
 ## ✨ What this project does
 
 * Stores failures in a **Global Failure Knowledge Base (GFKB)**

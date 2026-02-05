@@ -11,7 +11,14 @@
     .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     textarea { min-height: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     .pill{display:inline-block; padding:2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border:1px solid rgba(37,99,235,.35);}
+    .pill.safe{ background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.35); }
+    .pill.warning{ background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); }
+    .pill.blocked{ background: rgba(244,63,94,.12); border-color: rgba(244,63,94,.35); }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
+    .notice { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); }
+    .notice.safe { background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.35); }
+    .notice.warning { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.35); }
+    .notice.blocked { background: rgba(244,63,94,.12); border-color: rgba(244,63,94,.35); }
   </style>
 </head>
 <body>
@@ -94,8 +101,27 @@
       <div class="small">Provider: <b>{{ last.provider }}</b> · Model: <b>{{ last.model }}</b> · Latency: <b>{{ last.latency_ms }}ms</b>
         {% if last.run_id %} · <a href="/runs/{{ last.run_id }}">Open Run</a>{% endif %}
         {% if last.agent_name %} · Agent: <b>{{ last.agent_name }}</b>{% endif %}
+        {% if last.safety_label %} · Safety: <span class="pill {{ last.safety_level or '' }}">{{ last.safety_label }}</span>{% endif %}
+        · Warnings created: <b>{% if last.warnings_created %}Yes{% else %}No{% endif %}</b>
+        {% if last.warnings_link %} · <a href="{{ last.warnings_link }}">View</a>{% endif %}
       </div>
-      <pre style="white-space:pre-wrap; margin-top:10px">{{ last.output }}</pre>
+
+      {% if last.show_safety_banner %}
+      <div class="notice {{ last.safety_level or 'warning' }}">
+        <b>Safety signal:</b>
+        {% if last.safety_label %}{{ last.safety_label }}{% else %}WARNING{% endif %}
+        {% if last.alert_sent %} · <b>Alert sent</b>{% endif %}
+        · <a href="/warnings">Open Warnings</a>
+      </div>
+      {% endif %}
+
+      {% if last.prompt %}
+      <div class="small" style="margin-top:10px"><b>You asked</b></div>
+      <pre style="white-space:pre-wrap; margin-top:6px">{{ last.prompt }}</pre>
+      {% endif %}
+
+      <div class="small" style="margin-top:10px"><b>Answer</b></div>
+      <pre style="white-space:pre-wrap; margin-top:6px">{{ last.output }}</pre>
     </div>
     {% endif %}
   </div>

@@ -10,6 +10,10 @@ import re
 from collections import defaultdict, deque
 from urllib.parse import quote
 import secrets
+import hashlib
+import sqlite3
+import shutil
+from pathlib import Path
 
 import logging
 
@@ -271,10 +275,12 @@ def env_url(name: str, default: str) -> str:
 
 GFKB_URL = env_url("GFKB_URL", "http://gfkb:8101")
 HEALTH_URL = env_url("HEALTH_URL", "http://health-scoring:8106")
+EVENT_BUS_URL = env_url("EVENT_BUS_URL", "http://event-bus:8100")
 WARN_URL = env_url("WARN_URL", "http://warning-policy:8105")
 INGEST_URL = env_url("INGEST_URL", "http://ingestion:8102")
 OLLAMA_URL = env_url("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = env_url("OLLAMA_MODEL", "llama3")
+EVENT_BUS_URL = env_url("EVENT_BUS_URL", "http://event-bus:8100")
 
 
 async def list_ollama_models() -> list[str]:
@@ -301,6 +307,176 @@ async def list_ollama_models() -> list[str]:
 
 COOKIE_NAME = "aitester_token"
 IMPERSONATE_COOKIE = "aitester_impersonate_role"
+
+# Demo apps that ship with sample data; hide them from selectors by default.
+HIDDEN_APPS = {"app-A", "app-B"}
+
+DATA_DIR = Path("/app/data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ts_for_backup() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _backup_file(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    bak = path.with_name(f"{path.name}.bak-{_ts_for_backup()}")
+    shutil.copy2(path, bak)
+    return bak
+
+
+def _purge_jsonl_apps(path: Path, app_ids: set[str]) -> dict[str, int]:
+    """Remove JSONL rows for specific app_ids.
+
+    For failures/patterns: remove app_ids from affected_apps, and drop row if empty.
+    For health: drop row if obj.app_id in app_ids.
+    """
+    if not path.exists():
+        return {"kept": 0, "removed": 0, "updated": 0}
+
+    removed = 0
+    kept = 0
+    updated = 0
+    out_lines: list[str] = []
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            # keep invalid lines as-is (shouldn't happen, but be safe)
+            out_lines.append(line)
+            kept += 1
+            continue
+
+        # Health points: direct app_id field.
+        if obj.get("app_id") in app_ids and path.name == "health.jsonl":
+            removed += 1
+            continue
+
+        # Failures/patterns: affected_apps list.
+        if "affected_apps" in obj and isinstance(obj.get("affected_apps"), list):
+            before = list(obj.get("affected_apps") or [])
+            after = [a for a in before if a not in app_ids]
+            if after != before:
+                obj["affected_apps"] = after
+                updated += 1
+            if not after and path.name in {"failures.jsonl", "patterns.jsonl"}:
+                removed += 1
+                continue
+
+        out_lines.append(json.dumps(obj, ensure_ascii=False))
+        kept += 1
+
+    path.write_text("\n".join(out_lines) + ("\n" if out_lines else ""), encoding="utf-8")
+    return {"kept": kept, "removed": removed, "updated": updated}
+
+
+def _purge_dashboard_db(db_path: Path, app_ids: set[str]) -> dict[str, int]:
+    """Delete demo-app rows from dashboard SQLite, including dependent tables."""
+    if not db_path.exists():
+        return {"trace_runs": 0, "trace_spans": 0, "run_feedback": 0, "experiment_runs": 0, "evaluation_results": 0, "scenario_runs": 0, "warning_events": 0, "dataset_examples": 0}
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join(["?"] * len(app_ids))
+        ids = sorted(app_ids)
+
+        # Identify TraceRun ids to delete.
+        cur.execute(f"SELECT id FROM trace_runs WHERE app_id IN ({placeholders})", ids)
+        trace_run_ids = [int(r[0]) for r in cur.fetchall()]
+
+        counts: dict[str, int] = {}
+
+        if trace_run_ids:
+            tr_ph = ",".join(["?"] * len(trace_run_ids))
+
+            cur.execute(f"DELETE FROM trace_spans WHERE trace_run_id IN ({tr_ph})", trace_run_ids)
+            counts["trace_spans"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM run_feedback WHERE trace_run_id IN ({tr_ph})", trace_run_ids)
+            counts["run_feedback"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM experiment_runs WHERE trace_run_id IN ({tr_ph})", trace_run_ids)
+            counts["experiment_runs"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM evaluation_results WHERE trace_run_id IN ({tr_ph})", trace_run_ids)
+            counts["evaluation_results"] = cur.rowcount
+
+            cur.execute(f"DELETE FROM trace_runs WHERE id IN ({tr_ph})", trace_run_ids)
+            counts["trace_runs"] = cur.rowcount
+        else:
+            counts.update({"trace_spans": 0, "run_feedback": 0, "experiment_runs": 0, "evaluation_results": 0, "trace_runs": 0})
+
+        # Direct app_id tables.
+        cur.execute(f"DELETE FROM scenario_runs WHERE app_id IN ({placeholders})", ids)
+        counts["scenario_runs"] = cur.rowcount
+
+        cur.execute(f"DELETE FROM warning_events WHERE app_id IN ({placeholders})", ids)
+        counts["warning_events"] = cur.rowcount
+
+        cur.execute(f"DELETE FROM dataset_examples WHERE app_id IN ({placeholders})", ids)
+        counts["dataset_examples"] = cur.rowcount
+
+        conn.commit()
+        return counts
+    finally:
+        conn.close()
+
+
+def _coerce_float_confidence(x: Any, default: float = 0.0) -> str:
+    try:
+        v = float(x)
+        if v < 0:
+            v = 0.0
+        if v > 1:
+            v = 1.0
+        return f"{v:.2f}"
+    except Exception:
+        return f"{default:.2f}"
+
+
+def _stable_fingerprint(obj: dict[str, Any]) -> str:
+    """Best-effort stable fingerprint for UI.
+
+    GFKB's CanonicalFailureRecord doesn't currently include a fingerprint field,
+    so we compute a short hash from signature/context to keep the UI useful.
+    """
+    base = (
+        obj.get("signature_text")
+        or json.dumps(obj.get("context_signature") or {}, sort_keys=True, ensure_ascii=False)
+        or json.dumps(obj, sort_keys=True, ensure_ascii=False)
+    )
+    h = hashlib.sha256(str(base).encode("utf-8")).hexdigest()
+    return h[:16]
+
+
+def _dedupe_latest_failures(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for r in rows or []:
+        fid = str(r.get("failure_id") or "")
+        if not fid:
+            continue
+        try:
+            ver = int(r.get("version") or 0)
+        except Exception:
+            ver = 0
+        prev = latest.get(fid)
+        if not prev:
+            latest[fid] = r
+            continue
+        try:
+            prev_ver = int(prev.get("version") or 0)
+        except Exception:
+            prev_ver = 0
+        if ver >= prev_ver:
+            latest[fid] = r
+    # stable sort: newest (highest version) first
+    return sorted(latest.values(), key=lambda x: int(x.get("version") or 0), reverse=True)
 
 # --- Simple in-memory rate limiting (per process) ---
 # For production, replace with a shared store / edge rate limiter.
@@ -599,11 +775,96 @@ def _agent_row(a: AgentRegistry) -> dict[str, Any]:
     }
 
 
+def _get_known_app_choices(s: Any) -> list[str]:
+    """Best-effort list of app_ids seen in the system (excluding demo apps)."""
+    app_ids: set[str] = set()
+
+    try:
+        app_ids.update({str(r[0]) for r in s.query(TraceRun.app_id).distinct().all() if r and r[0]})
+    except Exception:
+        pass
+    try:
+        app_ids.update({str(r[0]) for r in s.query(WarningEvent.app_id).distinct().all() if r and r[0]})
+    except Exception:
+        pass
+    try:
+        app_ids.update({str(r[0]) for r in s.query(DatasetExample.app_id).distinct().all() if r and r[0]})
+    except Exception:
+        pass
+
+    app_ids = {a.strip() for a in app_ids if a and str(a).strip()}
+    app_ids = {a for a in app_ids if a not in HIDDEN_APPS}
+
+    if not app_ids:
+        app_ids = {"kids-app"}
+
+    return sorted(app_ids)
+
+
 @app.get("/admin")
 async def admin_root(user: dict[str, Any] | RedirectResponse = Depends(require_roles([ROLE_ADMIN]))):
     if isinstance(user, RedirectResponse):
         return user
     return RedirectResponse(url="/admin/users", status_code=302)
+
+
+@app.get("/admin/purge-demo", response_class=HTMLResponse)
+async def admin_purge_demo(
+    request: Request,
+    user: dict[str, Any] | RedirectResponse = Depends(require_roles([ROLE_ADMIN])),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+
+    return templates.TemplateResponse(
+        "admin_purge_demo.html",
+        {
+            "request": request,
+            "email": user.get("email"),
+            "role": (user.get("effective_roles") or user.get("roles") or [""])[0],
+            "is_admin": True,
+            "apps": sorted(HIDDEN_APPS),
+            "message": request.query_params.get("message") or "",
+            "error": request.query_params.get("error") or "",
+        },
+    )
+
+
+@app.post("/admin/purge-demo/run")
+async def admin_purge_demo_run(
+    request: Request,
+    user: dict[str, Any] | RedirectResponse = Depends(require_roles([ROLE_ADMIN])),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+
+    app_ids = set(HIDDEN_APPS)
+    try:
+        db_path = DATA_DIR / "dashboard.db"
+        health_path = DATA_DIR / "health.jsonl"
+        failures_path = DATA_DIR / "failures.jsonl"
+        patterns_path = DATA_DIR / "patterns.jsonl"
+
+        backups: dict[str, str] = {}
+        for p in [db_path, health_path, failures_path, patterns_path]:
+            bak = _backup_file(p)
+            if bak:
+                backups[p.name] = bak.name
+
+        db_counts = _purge_dashboard_db(db_path, app_ids)
+        health_counts = _purge_jsonl_apps(health_path, app_ids)
+        failure_counts = _purge_jsonl_apps(failures_path, app_ids)
+        pattern_counts = _purge_jsonl_apps(patterns_path, app_ids)
+
+        msg = (
+            f"Purged demo apps {sorted(app_ids)}. "
+            f"DB: {db_counts}. health.jsonl: {health_counts}. failures.jsonl: {failure_counts}. patterns.jsonl: {pattern_counts}. "
+            f"Backups: {backups or 'none'}"
+        )
+        return RedirectResponse(url=f"/admin/purge-demo?message={quote(msg)}", status_code=303)
+    except Exception as e:
+        logger.exception("purge-demo failed")
+        return RedirectResponse(url=f"/admin/purge-demo?error={quote(str(e))}", status_code=303)
 
 
 # ============================================================================
@@ -1041,6 +1302,110 @@ def _startup() -> None:
         # Use these to validate RBAC (viewer/operator) and all flows.
         _ensure_user(email="operator@kakveda.local", password="Operator@123", role=ROLE_OPERATOR)
         _ensure_user(email="viewer@kakveda.local", password="Viewer@123", role=ROLE_VIEWER)
+
+
+@app.on_event("startup")
+async def _subscribe_event_bus() -> None:
+    """Best-effort subscriptions so external agents show up in the dashboard.
+
+    - `trace.ingested` -> persists TraceRun rows (Runs page)
+    - `child_safety_alert` -> persists WarningEvent rows (Warnings page)
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"{EVENT_BUS_URL}/subscribe",
+                json={"topic": "trace.ingested", "callback_url": "http://dashboard:8110/events/trace"},
+            )
+            await client.post(
+                f"{EVENT_BUS_URL}/subscribe",
+                json={"topic": "child_safety_alert", "callback_url": "http://dashboard:8110/events/child-safety"},
+            )
+        logger.info("event-bus subscriptions registered")
+    except Exception as e:
+        # don't fail dashboard startup if event-bus isn't ready yet
+        logger.warning(f"event-bus subscription failed: {e}")
+
+
+@app.post("/events/trace")
+async def on_trace_ingested(trace: dict[str, Any]):
+    """Persist externally-ingested traces as TraceRuns."""
+    try:
+        app_id = str(trace.get("app_id") or "unknown")
+        agent_id = str(trace.get("agent_id") or "unknown")
+        prompt = str(trace.get("prompt") or "")
+        response = str(trace.get("response") or "")
+        model = str(trace.get("model") or "")
+        env = trace.get("env") if isinstance(trace.get("env"), dict) else {}
+
+        status_raw = str(env.get("status") or "completed").lower()
+        status = "error" if status_raw in {"error", "failed", "blocked"} else "completed"
+        err = env.get("error")
+
+        with get_session() as s:
+            tr = TraceRun(
+                scenario_run_id=None,
+                app_id=app_id,
+                agent_id=agent_id,
+                name=str(env.get("event_name") or "trace.ingested"),
+                status=status,
+                provider=str(env.get("provider") or ""),
+                model=model or None,
+                input_json=json.dumps({"prompt": prompt, "trace_id": trace.get("trace_id"), "ts": trace.get("ts")}),
+                output_json=json.dumps({"response": response, "env": env, "trace": trace}),
+                error=str(err) if err else None,
+                duration_ms=int(env.get("duration_ms") or 0) if str(env.get("duration_ms") or "").isdigit() else None,
+            )
+            s.add(tr)
+            s.commit()
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"trace ingest persist failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/events/child-safety")
+async def on_child_safety_alert(evt: dict[str, Any]):
+    """Persist child safety alerts as WarningEvents so they show up in /warnings."""
+    try:
+        alert_type = str(evt.get("alert_type") or "")
+        question = str(evt.get("question") or "")
+        severity = str(evt.get("severity") or "").lower()
+        recommendation = str(evt.get("recommendation") or "")
+        detected = evt.get("detected_keywords") or []
+        if not isinstance(detected, list):
+            detected = []
+
+        # Heuristic mapping severity->confidence
+        conf = 0.6
+        if severity == "high":
+            conf = 0.95
+        elif severity == "medium":
+            conf = 0.75
+        elif severity == "low":
+            conf = 0.55
+
+        action = "warn"
+        if alert_type == "blocked_content":
+            action = "block"
+
+        with get_session() as s:
+            we = WarningEvent(
+                app_id=str(evt.get("app_id") or "kids-app"),
+                agent_id=str(evt.get("agent_id") or "kakveda-kids-agent"),
+                action=action,
+                confidence=_coerce_float_confidence(conf, default=conf),
+                pattern_id=None,
+                prompt=question,
+                message=recommendation or f"Child safety alert: {alert_type}",
+                references_json=json.dumps(detected),
+            )
+            s.add(we)
+            s.commit()
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"child safety persist failed: {e}")
+        return {"ok": False, "error": str(e)}
         s.commit()
 
 @app.get("/projects", response_class=HTMLResponse)
@@ -1223,12 +1588,39 @@ async def home(request: Request, user: dict[str, Any] = Depends(require_login)):
     roles = user.get("roles", [])
     role = roles[0] if roles else "unknown"
 
+    # Choose which app_id to plot for health trend.
+    # Priority: explicit query param -> latest ingested run -> demo default.
+    app_id_for_health = request.query_params.get("app_id")
+
+    # Populate app choices from ingested runs (best-effort).
+    app_choices: list[str] = []
+    with get_session() as s:
+        try:
+            app_choices = [r[0] for r in s.query(TraceRun.app_id).distinct().order_by(TraceRun.app_id.asc()).all() if r and r[0]]
+        except Exception:
+            app_choices = []
+
+        # Hide demo apps from selectors.
+        app_choices = [a for a in app_choices if a not in HIDDEN_APPS]
+
+        if not app_id_for_health:
+            row = s.query(TraceRun.app_id).order_by(TraceRun.ts.desc()).first()
+            if row and row[0]:
+                cand = str(row[0])
+                if cand not in HIDDEN_APPS:
+                    app_id_for_health = cand
+
+    if not app_id_for_health:
+        app_id_for_health = app_choices[0] if app_choices else "kids-app"
+
     async with httpx.AsyncClient(timeout=5.0) as client:
         failures = []
         patterns = []
         health_points = []
+        latest_health_score: float | None = None
         try:
-            failures = (await client.get(f"{GFKB_URL}/failures", params={"limit": 10})).json().get("failures", [])
+            failures = (await client.get(f"{GFKB_URL}/failures")).json().get("failures", [])
+            failures = _dedupe_latest_failures(failures)[:10]
         except Exception:
             failures = []
         try:
@@ -1236,9 +1628,19 @@ async def home(request: Request, user: dict[str, Any] = Depends(require_login)):
         except Exception:
             patterns = []
         try:
-            health_points = (await client.get(f"{HEALTH_URL}/health/app-A", params={"limit": 40})).json().get("points", [])
+            health_points = (
+                (await client.get(f"{HEALTH_URL}/health/{quote(app_id_for_health)}", params={"limit": 40}))
+                .json()
+                .get("points", [])
+            )
         except Exception:
             health_points = []
+
+        if health_points:
+            try:
+                latest_health_score = float(health_points[-1].get("score"))
+            except Exception:
+                latest_health_score = None
 
     # last warnings collected by dashboard
     with get_session() as s:
@@ -1258,8 +1660,137 @@ async def home(request: Request, user: dict[str, Any] = Depends(require_login)):
             "failures": failures,
             "patterns": patterns,
             "health_points": health_points,
+            "health_app_id": app_id_for_health,
+            "health_app_choices": app_choices,
+            "latest_health_score": latest_health_score,
             "warnings": warnings,
         },
+    )
+
+
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def health_view(
+    request: Request,
+    app_id: str | None = Query(None),
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    is_admin = bool(user.get("is_admin"))
+
+    # Resolve app_id similarly to home.
+    app_choices: list[str] = []
+    with get_session() as s:
+        try:
+            app_choices = [r[0] for r in s.query(TraceRun.app_id).distinct().order_by(TraceRun.app_id.asc()).all() if r and r[0]]
+        except Exception:
+            app_choices = []
+
+        app_choices = [a for a in app_choices if a not in HIDDEN_APPS]
+
+        if not app_id:
+            row = s.query(TraceRun.app_id).order_by(TraceRun.ts.desc()).first()
+            if row and row[0]:
+                cand = str(row[0])
+                if cand not in HIDDEN_APPS:
+                    app_id = cand
+    if not app_id:
+        app_id = app_choices[0] if app_choices else "kids-app"
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            health_points = (
+                (await client.get(f"{HEALTH_URL}/health/{quote(app_id)}", params={"limit": 200}))
+                .json()
+                .get("points", [])
+            )
+        except Exception:
+            health_points = []
+
+    latest_health_score: float | None = None
+    if health_points:
+        try:
+            latest_health_score = float(health_points[-1].get("score"))
+        except Exception:
+            latest_health_score = None
+
+    return templates.TemplateResponse(
+        "health.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "is_admin": is_admin,
+            "health_points": health_points,
+            "health_app_id": app_id,
+            "health_app_choices": app_choices,
+            "latest_health_score": latest_health_score,
+            "message": request.query_params.get("message") or "",
+            "error": request.query_params.get("error") or "",
+        },
+    )
+
+
+@app.post("/health/test")
+async def health_generate_test_event(
+    request: Request,
+    user: dict[str, Any] | RedirectResponse = Depends(require_roles([ROLE_ADMIN])),
+    app_id: str = Form("app-A"),
+    failure_type: str = Form("HALLUCINATION_CITATION"),
+    severity: str = Form("high"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+
+    aid = (app_id or "app-A").strip() or "app-A"
+    ftype = (failure_type or "HALLUCINATION_CITATION").strip() or "HALLUCINATION_CITATION"
+    sev = (severity or "high").strip().lower() or "high"
+    if sev not in {"low", "medium", "high"}:
+        sev = "high"
+
+    payload = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "app_id": aid,
+        "failure_type": ftype,
+        "severity": sev,
+        "summary": f"dashboard test event ({ftype})",
+        "source": "dashboard",
+        "event_id": str(uuid.uuid4()),
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.post(
+                f"{EVENT_BUS_URL}/publish",
+                json={"topic": "failure.detected", "event": payload},
+            )
+            ok = 200 <= int(r.status_code) < 300
+    except Exception as e:
+        return RedirectResponse(
+            url=f"/health?app_id={quote(aid)}&error={quote('publish failed: ' + str(e)[:80])}",
+            status_code=303,
+        )
+
+    if not ok:
+        detail = ""
+        try:
+            detail = (r.text or "").strip()
+        except Exception:
+            detail = ""
+        msg = f"publish failed: HTTP {getattr(r, 'status_code', '?')}"
+        if detail:
+            msg = f"{msg} {detail[:120]}"
+        return RedirectResponse(
+            url=f"/health?app_id={quote(aid)}&error={quote(msg)}",
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        url=f"/health?app_id={quote(aid)}&message={quote('test event published')}",
+        status_code=303,
     )
 
 
@@ -1281,14 +1812,39 @@ async def failure_detail(request: Request, failure_id: str, user: dict[str, Any]
             # Fetch failure details from GFKB
             resp = await client.get(f"{GFKB_URL}/failures")
             all_failures = resp.json().get("failures", [])
-            # Find the specific failure (match failure_id with or without version)
-            for f in all_failures:
-                fid = f.get("failure_id", "")
-                version = f.get("version", 1)
-                full_id = f"{fid}v{version}"
-                if failure_id == fid or failure_id == full_id or failure_id.startswith(fid):
-                    failure = f
-                    break
+
+            # Find the specific failure deterministically.
+            # Accept /failure/F-0001 or /failure/F-0001v3.
+            wanted_fid = str(failure_id).split("v")[0]
+            candidates = [f for f in all_failures if str(f.get("failure_id") or "") == wanted_fid]
+            if candidates:
+                # If version explicitly requested, prefer exact.
+                if "v" in str(failure_id):
+                    try:
+                        wanted_ver = int(str(failure_id).split("v", 1)[1])
+                    except Exception:
+                        wanted_ver = None
+                    if wanted_ver is not None:
+                        for f in candidates:
+                            try:
+                                cand_ver = int(f.get("version") or 0)
+                            except Exception:
+                                cand_ver = 0
+                            if cand_ver == wanted_ver:
+                                failure = f
+                                break
+                # Otherwise pick latest version.
+                if failure is None:
+                    failure = sorted(candidates, key=lambda x: int(x.get("version") or 0), reverse=True)[0]
+
+            # Enrich for UI template compatibility.
+            if failure:
+                aff = [a for a in (failure.get("affected_apps") or []) if a not in HIDDEN_APPS]
+                failure["affected_apps"] = aff
+                failure.setdefault("fingerprint", _stable_fingerprint(failure))
+                failure.setdefault("description", failure.get("signature_text") or failure.get("failure_type"))
+                # Template expects remediation; GFKB calls it resolution.
+                failure.setdefault("remediation", failure.get("resolution"))
         except Exception:
             failure = None
 
@@ -1329,29 +1885,26 @@ async def failure_detail(request: Request, failure_id: str, user: dict[str, Any]
 
 
 @app.get("/warnings", response_class=HTMLResponse)
-async def warnings_page(request: Request, user: dict[str, Any] = Depends(require_login)):
+async def warnings_page(request: Request, user: dict[str, Any] = Depends(require_login), app_id: str | None = None):
     if isinstance(user, RedirectResponse):
         return user
     email = user["email"]
     roles = user.get("roles", [])
     role = roles[0] if roles else "unknown"
+    app_filter = (app_id.strip() if app_id else "") or None
     with get_session() as s:
-        warnings = (
-            s.query(WarningEvent)
-            .order_by(WarningEvent.ts.desc())
-            .limit(200)
-            .all()
-        )
+        warnings_query = s.query(WarningEvent)
+        if app_filter:
+            warnings_query = warnings_query.filter(WarningEvent.app_id == app_filter)
+        warnings = warnings_query.order_by(WarningEvent.ts.desc()).limit(200).all()
 
         # Analytics: last 30 days (lightweight, no external chart deps).
         now = utcnow()
         start = now - timedelta(days=30)
-        warnings_30d = (
-            s.query(WarningEvent)
-            .filter(WarningEvent.ts >= start)
-            .order_by(WarningEvent.ts.asc())
-            .all()
-        )
+        warnings_30d_query = s.query(WarningEvent).filter(WarningEvent.ts >= start)
+        if app_filter:
+            warnings_30d_query = warnings_30d_query.filter(WarningEvent.app_id == app_filter)
+        warnings_30d = warnings_30d_query.order_by(WarningEvent.ts.asc()).all()
 
         # Daily counts
         day_counts: dict[str, int] = {}
@@ -1378,10 +1931,10 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
         pattern_counts: dict[str, int] = {}
         for w in warnings_30d:
             try:
-                app_id = str(w.app_id or "unknown")
-                app_counts[app_id] = app_counts.get(app_id, 0) + 1
-                pid = str(w.pattern_id or "(none)")
-                pattern_counts[pid] = pattern_counts.get(pid, 0) + 1
+                app_key = str(w.app_id or "unknown")
+                app_counts[app_key] = app_counts.get(app_key, 0) + 1
+                pattern_key = str(w.pattern_id or "(none)")
+                pattern_counts[pattern_key] = pattern_counts.get(pattern_key, 0) + 1
             except Exception:
                 continue
 
@@ -1389,19 +1942,18 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
         warnings_by_pattern = [{"label": k, "value": v} for k, v in sorted(pattern_counts.items(), key=lambda kv: kv[1], reverse=True)]
 
         # Cost impact by app (from runs) - sum over last 30 days.
-        runs_30d = (
-            s.query(TraceRun)
-            .filter(TraceRun.ts >= start)
-            .all()
-        )
+        runs_30d_query = s.query(TraceRun).filter(TraceRun.ts >= start)
+        if app_filter:
+            runs_30d_query = runs_30d_query.filter(TraceRun.app_id == app_filter)
+        runs_30d = runs_30d_query.all()
         cost_by_app_map: dict[str, float] = {}
         total_cost_usd_30d = 0.0
         for r in runs_30d:
             try:
-                app_id = str(r.app_id or "unknown")
+                app_key = str(r.app_id or "unknown")
                 usd = _micro_to_usd(r.cost_usd)
                 total_cost_usd_30d += usd
-                cost_by_app_map[app_id] = cost_by_app_map.get(app_id, 0.0) + usd
+                cost_by_app_map[app_key] = cost_by_app_map.get(app_key, 0.0) + usd
             except Exception:
                 continue
 
@@ -1419,12 +1971,10 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
 
         # Raw rows for instant client-side filtering (max 90 days).
         start90 = now - timedelta(days=90)
-        warnings_90d = (
-            s.query(WarningEvent)
-            .filter(WarningEvent.ts >= start90)
-            .order_by(WarningEvent.ts.asc())
-            .all()
-        )
+        warnings_90d_query = s.query(WarningEvent).filter(WarningEvent.ts >= start90)
+        if app_filter:
+            warnings_90d_query = warnings_90d_query.filter(WarningEvent.app_id == app_filter)
+        warnings_90d = warnings_90d_query.order_by(WarningEvent.ts.asc()).all()
         warnings_rows = [
             {
                 "ts": (w.ts.isoformat() if w.ts else None),
@@ -1436,12 +1986,10 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
             for w in warnings_90d
         ]
 
-        runs_90d = (
-            s.query(TraceRun)
-            .filter(TraceRun.ts >= start90)
-            .order_by(TraceRun.ts.asc())
-            .all()
-        )
+        runs_90d_query = s.query(TraceRun).filter(TraceRun.ts >= start90)
+        if app_filter:
+            runs_90d_query = runs_90d_query.filter(TraceRun.app_id == app_filter)
+        runs_90d = runs_90d_query.order_by(TraceRun.ts.asc()).all()
         runs_rows = [
             {
                 "ts": (r.ts.isoformat() if r.ts else None),
@@ -1463,6 +2011,7 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
             "analytics": analytics,
             "warnings_rows": warnings_rows,
             "runs_rows": runs_rows,
+            "app_id": app_filter or "",
         },
     )
 
@@ -1475,6 +2024,7 @@ async def scenarios_page(request: Request, user: dict[str, Any] = Depends(requir
     roles = user.get("roles", [])
     role = roles[0] if roles else "unknown"
     with get_session() as s:
+        app_choices = _get_known_app_choices(s)
         scenario_runs = (
             s.query(ScenarioRun)
             .order_by(ScenarioRun.ts.desc())
@@ -1512,7 +2062,7 @@ async def scenarios_page(request: Request, user: dict[str, Any] = Depends(requir
 
     return templates.TemplateResponse(
         "scenarios.html",
-        {"request": request, "email": email, "role": role, "runs": runs},
+        {"request": request, "email": email, "role": role, "runs": runs, "app_choices": app_choices},
     )
 
 
@@ -2463,6 +3013,9 @@ async def playground_page(
                 used_model = run.model or ""
                 latency_ms = str(run.duration_ms or "")
                 out_text = run.output_json or ""
+                content_rating = ""
+                alert_sent = False
+                asked_prompt = ""
                 try:
                     jo = json.loads(run.output_json or "{}")
                     gen = (jo or {}).get("gen") or {}
@@ -2470,8 +3023,35 @@ async def playground_page(
                     used_model = used_model or (gen.get("model") or "")
                     latency_ms = latency_ms or str(gen.get("latency_ms") or "")
                     out_text = (jo or {}).get("response") or out_text
+                    content_rating = str(gen.get("content_rating") or "")
+                    alert_sent = bool(gen.get("alert_sent") or False)
                 except Exception:
                     pass
+
+                try:
+                    ji = json.loads(run.input_json or "{}")
+                    asked_prompt = str((ji or {}).get("prompt") or "")
+                except Exception:
+                    asked_prompt = ""
+
+                safety_level = ""
+                safety_label = ""
+                show_safety_banner = False
+                try:
+                    cr = (content_rating or "").strip().lower()
+                    if cr in {"blocked", "warning", "safe"}:
+                        safety_level = cr
+                        safety_label = cr.upper()
+                    if cr in {"blocked", "warning"} or alert_sent:
+                        show_safety_banner = True
+                        if not safety_level:
+                            safety_level = "warning"
+                            safety_label = "WARNING"
+                except Exception:
+                    show_safety_banner = False
+
+                warnings_created = bool(show_safety_banner)
+                warnings_link = f"/warnings?app_id={run.app_id}" if run.app_id else "/warnings"
 
                 last = {
                     "run_id": run.id,
@@ -2479,6 +3059,15 @@ async def playground_page(
                     "model": used_model,
                     "latency_ms": latency_ms,
                     "output": out_text,
+                    "prompt": asked_prompt,
+                    "app_id": run.app_id,
+                    "content_rating": content_rating,
+                    "alert_sent": alert_sent,
+                    "show_safety_banner": show_safety_banner,
+                    "safety_level": safety_level,
+                    "safety_label": safety_label,
+                    "warnings_created": warnings_created,
+                    "warnings_link": warnings_link,
                 }
 
     # Get registered agents for dropdown
@@ -2527,6 +3116,8 @@ async def playground_run(
         return user
 
     started = datetime.now(timezone.utc)
+    run_status = "completed"
+    run_error: str | None = None
     
     # Check if external agent is selected
     agent_name = None
@@ -2550,26 +3141,41 @@ async def playground_run(
                             if r.status_code == 200:
                                 data = r.json()
                                 response_text = data.get("answer", str(data))
+                                content_rating = str(data.get("content_rating") or "")
+                                alert_sent = bool(data.get("alert_sent") or False)
                                 gen_meta = {
                                     "provider": "external_agent",
                                     "model": agent_name,
                                     "agent_url": base_url,
-                                    "content_rating": data.get("content_rating", ""),
+                                    "content_rating": content_rating,
                                     "is_safe": data.get("is_safe", True),
                                     "detected_topics": data.get("detected_topics", []),
+                                    "alert_sent": alert_sent,
                                 }
+
+                                if (content_rating or "").strip().lower() == "blocked":
+                                    run_status = "error"
+                                    run_error = "Blocked content detected"
                             else:
                                 response_text = f"Error: Agent returned {r.status_code}"
                                 gen_meta = {"provider": "external_agent", "model": agent_name, "error": r.text}
+                                run_status = "error"
+                                run_error = f"External agent HTTP {r.status_code}"
                     except Exception as e:
                         response_text = f"Error calling agent: {str(e)}"
                         gen_meta = {"provider": "external_agent", "model": agent_name, "error": str(e)}
+                        run_status = "error"
+                        run_error = "Error calling external agent"
                 else:
                     response_text = "Agent not found or disabled"
                     gen_meta = {"provider": "external_agent", "error": "Agent not found"}
+                    run_status = "error"
+                    run_error = "External agent not found or disabled"
         except Exception as e:
             response_text = f"Invalid agent: {str(e)}"
             gen_meta = {"provider": "external_agent", "error": str(e)}
+            run_status = "error"
+            run_error = "Invalid external agent"
     else:
         # Use direct model (original behavior)
         response_text, gen_meta = await ollama_generate_with_meta_model(prompt, model)
@@ -2599,7 +3205,8 @@ async def playground_run(
             app_id=app_id,
             agent_id=agent_id,
             name="playground.run",
-            status="ok",
+            status=run_status,
+            error=run_error,
             duration_ms=duration_ms,
             provider=provider,
             model=str(gen_meta.get("model") or model),
@@ -2973,10 +3580,18 @@ async def dataset_detail(
         if not dataset:
             return RedirectResponse(url="/datasets", status_code=302)
         examples = s.query(DatasetExample).filter(DatasetExample.dataset_id == dataset_id).order_by(DatasetExample.created_at.desc()).all()
+        app_choices = _get_known_app_choices(s)
 
     return templates.TemplateResponse(
         "dataset_detail.html",
-        {"request": request, "email": email, "role": role, "dataset": dataset, "examples": examples},
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "dataset": dataset,
+            "examples": examples,
+            "app_choices": app_choices,
+        },
     )
 
 

@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Health</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .wrap { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-top: 16px; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; }
+    thead th { background: rgba(0,0,0,0.3); padding: 12px 14px; font-weight: 600; font-size: 0.8em; text-transform: uppercase; color: var(--muted); }
+    tbody td { padding: 12px 14px; border-bottom: 1px solid rgba(36,48,74,0.5); }
+    @media (max-width: 900px) { .wrap { padding: 16px; } header { flex-direction: column; gap: 12px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      <span class="pill">Health</span>
+    </div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/health" class="active">Health</a>
+      <a href="/agents">Agents</a>
+      <a href="/runs">Runs</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if message %}
+    <div class="card" style="border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08);">
+      <div class="small" style="color:#86efac;"><strong>OK:</strong> {{ message }}</div>
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="card" style="border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.08);">
+      <div class="small" style="color:#fca5a5;"><strong>Error:</strong> {{ error }}</div>
+    </div>
+    {% endif %}
+
+    <div class="row" style="justify-content:space-between;">
+      <h2 style="margin: 0;">Health for <span class="pill">{{ health_app_id }}</span></h2>
+      <div class="row">
+        <label class="small" for="healthAppSelect">App</label>
+        <select id="healthAppSelect" class="btn secondary" style="padding:6px 10px;">
+          {% for a in (health_app_choices or []) %}
+            <option value="{{ a }}" {% if a == health_app_id %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <a class="btn secondary" href="/?app_id={{ health_app_id }}" style="padding:6px 14px; font-size:0.85em;">Back to Dashboard</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between; margin-bottom:12px;">
+        <div class="small">Latest Score: <strong>{% if latest_health_score is not none %}{{ latest_health_score|round(2) }}{% else %}--{% endif %}</strong></div>
+        <div class="small">Points: <strong>{{ (health_points or [])|length }}</strong></div>
+      </div>
+      <canvas id="healthChart" height="90"></canvas>
+      <div class="small" style="margin-top:8px;">Tip: use <span class="pill">/?app_id=...</span> to change dashboard trend.</div>
+    </div>
+
+    {% if is_admin %}
+    <div class="card">
+      <h3 style="margin-top:0;">Admin: Generate Test Health Event</h3>
+      <div class="small" style="margin-bottom:12px;">Publishes a <span class="pill">failure.detected</span> event to event-bus; health-scoring should append a new point for this app.</div>
+      <form method="post" action="/health/test" class="row">
+        {{ csrf_input(request) | safe }}
+        <input type="hidden" name="app_id" value="{{ health_app_id }}" />
+        <label class="small" for="failure_type">Failure</label>
+        <select name="failure_type" class="btn secondary" style="padding:6px 10px;">
+          <option value="HALLUCINATION_CITATION">HALLUCINATION_CITATION</option>
+          <option value="TOXICITY">TOXICITY</option>
+          <option value="POLICY_VIOLATION">POLICY_VIOLATION</option>
+          <option value="DATA_LEAK">DATA_LEAK</option>
+          <option value="INJECTION">INJECTION</option>
+        </select>
+        <label class="small" for="severity">Severity</label>
+        <select name="severity" class="btn secondary" style="padding:6px 10px;">
+          <option value="high" selected>high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+        <button class="btn" type="submit" style="padding:8px 16px;">Generate</button>
+      </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3 style="margin-top:0;">Recent Health Points</h3>
+      <table>
+        <thead><tr><th>When</th><th>Score</th><th>Failure Rate</th><th>Recurrent Penalty</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for p in (health_points or [])|reverse %}
+          <tr>
+            <td class="small">{{ p.ts }}</td>
+            <td><span class="pill">{{ (p.score or 0)|round(2) }}</span></td>
+            <td class="small">{{ (p.failure_rate or 0)|round(2) }}</td>
+            <td class="small">{{ (p.recurrent_penalty or 0)|round(2) }}</td>
+            <td class="small">{{ p.notes or {} }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" style="text-align:center; color:var(--muted); padding:30px;">No health points yet for this app</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    var points = {{ health_points | tojson }};
+    var ctx = document.getElementById('healthChart');
+    var appSelect = document.getElementById('healthAppSelect');
+    if (appSelect) {
+      appSelect.addEventListener('change', function(){
+        var v = appSelect.value || 'app-A';
+        window.location = '/health?app_id=' + encodeURIComponent(v);
+      });
+    }
+    if (window.Chart && points.length) {
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: points.map(function(p){return p.ts;}),
+          datasets: [{
+            label: 'Health',
+            data: points.map(function(p){return p.score;}),
+            borderColor: '#2563eb',
+            backgroundColor: 'rgba(37,99,235,0.15)',
+            tension: 0.3,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#9aa8bf' } },
+            y: { min: 0, max: 100, ticks: { color: '#9aa8bf' } }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
