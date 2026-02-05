@@ -140,6 +140,9 @@ services:
       - "8122:8120"
 
   kakveda-kids-agent:
+    # Optional demo/companion agent. Enabled only when the `kids` profile is selected.
+    # Run with: `docker compose --profile kids up -d --build` (or `docker-compose --profile kids up -d --build`).
+    profiles: ["kids"]
     build:
       context: ../kakveda-kids-agent
       dockerfile: Dockerfile

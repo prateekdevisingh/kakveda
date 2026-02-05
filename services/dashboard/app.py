@@ -1276,6 +1276,8 @@ def _startup() -> None:
                 s.add(Role(name=r))
         s.commit()
 
+        force_pw = (os.environ.get("DASHBOARD_BOOTSTRAP_FORCE_PASSWORDS", "0") == "1")
+
         def _ensure_user(email: str, password: str, role: str):
             u = s.query(User).filter(User.email == email).first()
             if not u:
@@ -1283,6 +1285,23 @@ def _startup() -> None:
                 s.add(u)
                 s.flush()
                 s.add(AuditEvent(actor_email=None, action="bootstrap", details=f"created demo user {email}"))
+            else:
+                # Repair common "new setup with old DB" problems:
+                # - demo user was deleted and later re-added (missing role mapping)
+                # - demo user exists but was deactivated/unverified
+                # - optional: reset demo password to documented defaults
+                changed = False
+                if not bool(getattr(u, "is_active", True)):
+                    u.is_active = True
+                    changed = True
+                if not bool(getattr(u, "is_verified", True)):
+                    u.is_verified = True
+                    changed = True
+                if force_pw:
+                    u.password_hash = hash_password(password)
+                    changed = True
+                if changed:
+                    s.add(AuditEvent(actor_email=None, action="bootstrap", details=f"repaired demo user {email}"))
             # Ensure role mapping exists.
             db_role = s.query(Role).filter(Role.name == role).one()
             has = False
@@ -1295,13 +1314,19 @@ def _startup() -> None:
             if not has:
                 s.add(UserRole(user_id=u.id, role_id=db_role.id))
 
-        # Keep the legacy default admin for compatibility with existing docs.
+        # Default admin accounts for local/demo use.
+        # - `admin@local` is kept for backwards compatibility.
+        # - `admin@kakveda.local` is a valid email format for browsers that block `admin@local`.
         _ensure_user(email="admin@local", password="admin123", role=ROLE_ADMIN)
+        _ensure_user(email="admin@kakveda.local", password="admin123", role=ROLE_ADMIN)
 
         # Dummy credentials for QA/testing kakveda end-to-end.
         # Use these to validate RBAC (viewer/operator) and all flows.
         _ensure_user(email="operator@kakveda.local", password="Operator@123", role=ROLE_OPERATOR)
         _ensure_user(email="viewer@kakveda.local", password="Viewer@123", role=ROLE_VIEWER)
+
+        # Persist any bootstrapped users/role mappings.
+        s.commit()
 
 
 @app.on_event("startup")

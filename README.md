@@ -163,6 +163,12 @@ cd kakveda/kakveda-v1.0
 docker-compose up -d
 ```
 
+Optional: start the companion `kakveda-kids-agent` demo service (only if you have `../kakveda-kids-agent` present):
+
+```bash
+docker-compose --profile kids up -d --build
+```
+
 Open the dashboard:
 
 ```
@@ -193,7 +199,7 @@ kakveda version     # Show version info
 * **viewer@kakveda.local / Viewer@123** (viewer)
 
 > ⚠️ **Security warning:**
-> - The default admin (`admin@local` / `admin123`) is for first-time setup only.
+> - The default admin is for first-time setup only. If your browser blocks `admin@local` as an invalid email, use `admin@kakveda.local` (same password: `admin123`).
 > - **You must change the admin password immediately after setup!**
 > - For production, create a new admin and disable or delete the default.
 
@@ -319,6 +325,33 @@ curl -X POST http://localhost:8122/api/ask \
 4. Go to **Playground** → Select your agent from dropdown and test
 
 ### Agent Integration Requirements
+
+Kakveda **does not require any external agent** to run. The core stack (dashboard, event-bus, ingestion, etc.) works standalone.
+
+If you add a new agent:
+
+* Prefer running it as a separate container (or as an optional Compose profile).
+* Avoid breaking fresh installs by **not** making the agent build mandatory when its source folder isn’t present.
+* Use a unique host port to avoid conflicts (e.g., don’t reuse `8120/8122` if something is already bound).
+* When running inside the Docker network, use service DNS names like `http://event-bus:8100` and `http://dashboard:8110` (not `localhost`).
+
+**If you do add an agent into** `docker-compose.yml`, wrap it behind a profile:
+
+```yaml
+    my-agent:
+        profiles: ["agents"]
+        build: ../my-agent
+        environment:
+            - EVENT_BUS_URL=http://event-bus:8100
+        ports:
+            - "8125:8120"
+```
+
+Then start it only when needed:
+
+```bash
+docker-compose --profile agents up -d --build
+```
 
 For your agent to fully integrate with Kakveda, implement these endpoints:
 

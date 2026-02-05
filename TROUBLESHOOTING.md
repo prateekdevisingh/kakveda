@@ -135,6 +135,34 @@ python -m kakveda_cli.cli up
 
 ## 3. Dashboard Issues
 
+### Problem: Default admin login not working on a new setup
+
+**Symptom:** You try `admin@local / admin123` (or `admin@kakveda.local / admin123`) but the dashboard keeps redirecting back to `/auth/login?error=Invalid%20credentials`.
+
+**Common cause:** You're reusing an existing `data/dashboard.db` from an older machine/run and the demo admin user was deleted/disabled or had a different password. The dashboard startup bootstrap only guarantees the demo users exist and are active; it does not overwrite passwords unless explicitly asked.
+
+**Fix 1 (recommended): Use the browser-valid demo admin**
+
+- Login with: `admin@kakveda.local / admin123`
+
+**Fix 2: Force-reset demo passwords on startup (safe for local/demo)**
+
+```bash
+# One-time: force the documented demo passwords to be re-applied
+export DASHBOARD_BOOTSTRAP_FORCE_PASSWORDS=1
+docker-compose up -d --build dashboard
+```
+
+Then login again. You can unset the env var after recovery.
+
+**Fix 3: Full reset (deletes local data)**
+
+```bash
+docker-compose down -v
+rm -f data/dashboard.db
+docker-compose up -d
+```
+
 ### Problem: Internal Server Error (500) after login
 
 **Cause:** Database not initialized or template errors.
