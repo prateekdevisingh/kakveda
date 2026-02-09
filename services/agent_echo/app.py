@@ -4,8 +4,18 @@ import os
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="agent-echo", version="0.1.0")
+
+# Allow browser-based health checks from the dashboard
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "agent-echo")
 

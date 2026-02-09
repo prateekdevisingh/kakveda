@@ -60,9 +60,11 @@
         <a href="/warnings">Warnings</a>
         <a href="/datasets">Datasets</a>
         <a href="/prompts">Prompts</a>
+        <a href="/eval">Eval</a>
         <a href="/experiments">Experiments</a>
         <a href="/projects">Projects</a>
         {% if role == 'admin' %}<a href="/admin/users">Admin</a>{% endif %}
+        {% if role == 'admin' %}<a href="/admin/audit">Audit</a>{% endif %}
       </div>
       <form method="post" action="/auth/logout" style="display:inline-block; margin-left:8px;">
         {{ csrf_input(request) | safe }}

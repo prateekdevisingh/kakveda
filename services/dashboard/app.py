@@ -44,6 +44,7 @@ from db import (
     ProjectMember,
     Role,
     RunFeedback,
+    Scenario,
     ScenarioRun,
     TraceRun,
     TraceSpan,
@@ -114,7 +115,7 @@ CSRF_COOKIE = os.environ.get("DASHBOARD_CSRF_COOKIE", "aitester_csrf")
 
 SEC_HEADERS_CSP = os.environ.get(
     "DASHBOARD_CSP",
-    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'",
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8120 http://localhost:8122 http://127.0.0.1:8120 http://127.0.0.1:8122; base-uri 'self'; frame-ancestors 'none'",
 )
 SEC_HEADERS_HSTS = os.environ.get("DASHBOARD_HSTS", "max-age=31536000; includeSubDomains")
 
@@ -936,7 +937,21 @@ async def agents_test(
     
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{url}/health")
+            try:
+                # Try primary URL first
+                r = await client.get(f"{url}/health")
+            except Exception as primary_error:
+                # If primary fails, try localhost fallback
+                import re
+                port_match = re.search(r':(\d+)$', url)
+                port = port_match.group(1) if port_match else '8120'
+                fallback_url = f"http://localhost:{port}/health"
+                try:
+                    r = await client.get(fallback_url)
+                except:
+                    # Both failed, raise the original error
+                    raise primary_error
+            
             code = r.status_code
             if code == 200:
                 return RedirectResponse(url=f"/agents?message=Agent%20{a.name}%20is%20healthy%20(HTTP%20{code})", status_code=303)
@@ -1182,7 +1197,7 @@ async def api_agents_heartbeat(agent_id: int, request: Request):
 async def ollama_generate(prompt: str) -> str:
     # Same behavior as scripts/demo_client.py: if not reachable, return a stub that includes citations.
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
@@ -1190,7 +1205,8 @@ async def ollama_generate(prompt: str) -> str:
             r.raise_for_status()
             data = r.json()
             return data.get("response") or ""
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Ollama generate failed: {e}, using fallback response")
         return (
             "Here is a summary with references.\n\n"
             "References:\n"
@@ -1203,7 +1219,7 @@ async def ollama_generate_with_meta(prompt: str) -> tuple[str, dict[str, Any]]:
     """Generate response and include provider/latency metadata for observability UI."""
     started = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
                 f"{OLLAMA_URL}/api/generate",
                 json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
@@ -1215,7 +1231,8 @@ async def ollama_generate_with_meta(prompt: str) -> tuple[str, dict[str, Any]]:
                 data.get("response") or "",
                 {"provider": "ollama", "model": OLLAMA_MODEL, "url": OLLAMA_URL, "latency_ms": latency_ms},
             )
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Ollama generate_with_meta failed: {e}, using fallback")
         latency_ms = int((time.perf_counter() - started) * 1000)
         return (
             await ollama_generate(prompt),
@@ -2041,7 +2058,70 @@ async def warnings_page(request: Request, user: dict[str, Any] = Depends(require
     )
 
 
+@app.get("/api/scenarios-data")
+async def get_scenarios_data(user: dict[str, Any] = Depends(require_login)):
+    """Return all 50 scenarios in JSON format for dropdown/details UI."""
+    if isinstance(user, RedirectResponse):
+        return {"error": "unauthorized"}
+    
+    scenarios_data = {
+        "1": {"code": "Q1", "title": "Preflight Validation - Basic Detection", "description": "Can the preflight service detect a known failure pattern before it reaches the user?", "expected": "Preflight returns a warning with matching pattern from GFKB", "category": "Preflight Validation", "difficulty": "Easy", "prompt": "Explain the concept of machine learning without citations."},
+        "2": {"code": "Q2", "title": "Preflight Validation - Cold Start", "description": "What happens when a new app has no historical patterns in GFKB?", "expected": "Preflight should gracefully handle empty GFKB and allow execution", "category": "Preflight Validation", "difficulty": "Easy", "prompt": "Summarize a technical paper without providing sources."},
+        "3": {"code": "Q3", "title": "Preflight Validation - Threshold Boundary", "description": "How does the system behave when similarity score is exactly at 0.8 threshold?", "expected": "Score >= 0.8 triggers warning, < 0.8 allows execution", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Generate a response similar to known failure pattern Q3."},
+        "4": {"code": "Q4", "title": "Preflight Validation - False Positive Prevention", "description": "Can legitimate requests with high similarity be whitelisted?", "expected": "Admin can override warnings for validated requests", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Explain AI safety in a way that might trigger false positives."},
+        "5": {"code": "Q5", "title": "Preflight Validation - Multiple Patterns", "description": "When a prompt matches multiple failure patterns, which one is reported?", "expected": "Highest similarity score pattern is selected", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Test prompt matching multiple patterns."},
+        "6": {"code": "Q6", "title": "Preflight Validation - Policy Override", "description": "Can operators disable preflight validation for specific apps?", "expected": "Policy can be disabled per app in warning-policy service", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Request with policy override flag."},
+        "7": {"code": "Q7", "title": "Preflight Validation - Fingerprint Collision", "description": "Can different prompts have the same fingerprint?", "expected": "Fingerprints are unique per prompt hash; collisions are cryptographically unlikely", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Two similar but different prompts to test fingerprinting."},
+        "8": {"code": "Q8", "title": "Preflight Validation - Performance <50ms", "description": "Can preflight validation complete in under 50ms?", "expected": "Preflight latency < 50ms even with 10K+ patterns in GFKB", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Load test with concurrent preflight requests."},
+        "9": {"code": "Q9", "title": "Preflight Validation - Graceful Degradation", "description": "What happens if GFKB service is down during preflight?", "expected": "Preflight times out gracefully and allows request (fail-open)", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "GFKB service is unreachable."},
+        "10": {"code": "Q10", "title": "Preflight Validation - Citation Detection", "description": "Can preflight detect missing citations before response is generated?", "expected": "Fingerprinting identifies citation patterns early", "category": "Preflight Validation", "difficulty": "Expert", "prompt": "Request that will generate response without proper citations."},
+        "11": {"code": "Q11", "title": "GFKB & Pattern Matching - Auto Pattern Creation", "description": "When should a new failure pattern be automatically added to GFKB?", "expected": "After 3-5 confirmed similar failures or manual admin approval", "category": "GFKB & Pattern Matching", "difficulty": "Easy", "prompt": "Trigger automatic pattern creation."},
+        "12": {"code": "Q12", "title": "GFKB & Pattern Matching - Semantic Similarity", "description": "How does TF-IDF similarity differ from semantic similarity?", "expected": "TF-IDF is statistical (term frequency), semantic understands meaning", "category": "GFKB & Pattern Matching", "difficulty": "Easy", "prompt": "Compare statistical vs semantic matching."},
+        "13": {"code": "Q13", "title": "GFKB & Pattern Matching - Scaling to 100K Patterns", "description": "How does performance scale with 100K+ patterns in GFKB?", "expected": "Cosine similarity search with TF-IDF should complete in < 100ms with indexing", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Load test with maximum GFKB patterns."},
+        "14": {"code": "Q14", "title": "GFKB & Pattern Matching - Pattern Interference", "description": "Can similar patterns in GFKB interfere with each other's detection?", "expected": "Highest similarity match is selected; overlap managed by threshold", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Test overlapping failure patterns."},
+        "15": {"code": "Q15", "title": "GFKB & Pattern Matching - Pattern Deprecation", "description": "How are outdated patterns removed from GFKB?", "expected": "Admin can deprecate patterns; auto-deprecation after 6 months of no matches", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Verify pattern deprecation workflow."},
+        "16": {"code": "Q16", "title": "GFKB & Pattern Matching - Zero-Shot Detection", "description": "Can GFKB detect failure types not previously seen?", "expected": "No; GFKB relies on pattern history; requires learning phase", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Request for completely novel failure scenario."},
+        "17": {"code": "Q17", "title": "GFKB & Pattern Matching - Pattern Versioning", "description": "How are pattern definitions versioned as knowledge evolves?", "expected": "Each pattern has version field; history is maintained", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test pattern version tracking."},
+        "18": {"code": "Q18", "title": "GFKB & Pattern Matching - Cross-App Patterns", "description": "Should failure patterns be shared across all apps or app-specific?", "expected": "Global GFKB with optional app-specific overrides", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test cross-app pattern sharing."},
+        "19": {"code": "Q19", "title": "GFKB & Pattern Matching - False Negatives", "description": "What is the expected false negative rate with 0.8 similarity threshold?", "expected": "< 5% of actual failures should slip through (validate with labeled test set)", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Measure false negative rate."},
+        "20": {"code": "Q20", "title": "GFKB & Pattern Matching - Multilingual Patterns", "description": "Can GFKB match failure patterns across languages?", "expected": "Requires multilingual embeddings; current implementation is English-focused", "category": "GFKB & Pattern Matching", "difficulty": "Expert", "prompt": "Test multilingual pattern detection."},
+        "21": {"code": "Q21", "title": "Event Bus - Publish/Subscribe Timing", "description": "What is the latency of event bus pub/sub from publish to subscriber callback?", "expected": "< 50ms for local subscribers; HTTP fan-out adds network latency", "category": "Event Bus", "difficulty": "Easy", "prompt": "Measure event bus latency."},
+        "22": {"code": "Q22", "title": "Event Bus - Service Downtime Handling", "description": "What happens to events if a subscriber service is down?", "expected": "Events are best-effort; no retry; subscriber must implement polling fallback", "category": "Event Bus", "difficulty": "Easy", "prompt": "Stop subscriber service during event."},
+        "23": {"code": "Q23", "title": "Event Bus - Cascading Failures", "description": "Can a failed event handler trigger cascading failures across services?", "expected": "No; errors are isolated; each subscriber handles independently", "category": "Event Bus", "difficulty": "Medium", "prompt": "Trigger error in event handler."},
+        "24": {"code": "Q24", "title": "Event Bus - Event Deduplication", "description": "How are duplicate events prevented if event-bus restarts?", "expected": "No built-in deduplication; subscribers must implement idempotency", "category": "Event Bus", "difficulty": "Medium", "prompt": "Publish duplicate events."},
+        "25": {"code": "Q25", "title": "Event Bus - Circular Event Loops", "description": "Can circular event subscriptions create infinite loops?", "expected": "Yes; must be prevented by careful topic design and subscriber logic", "category": "Event Bus", "difficulty": "Medium", "prompt": "Create circular event subscription."},
+        "26": {"code": "Q26", "title": "Event Bus - Topic Governance", "description": "How are topics defined and documented?", "expected": "Central registry; e.g., trace.ingested, failure.detected, pattern.created", "category": "Event Bus", "difficulty": "Hard", "prompt": "Query topic registry."},
+        "27": {"code": "Q27", "title": "Event Bus - Parallel Event Processing", "description": "Can events be processed in parallel across multiple subscribers?", "expected": "Yes; asyncio.gather() executes HTTP POSTs concurrently", "category": "Event Bus", "difficulty": "Hard", "prompt": "Measure parallel event processing."},
+        "28": {"code": "Q28", "title": "Event Bus - Event Ordering Guarantees", "description": "Are events guaranteed to be processed in order?", "expected": "No; in-memory pub/sub is best-effort; order not guaranteed", "category": "Event Bus", "difficulty": "Hard", "prompt": "Test event ordering."},
+        "29": {"code": "Q29", "title": "Event Bus - Backpressure Handling", "description": "What happens if event bus receives more events than subscribers can handle?", "expected": "Events are queued in memory; risk of OOM if queue grows unbounded", "category": "Event Bus", "difficulty": "Hard", "prompt": "Overload event bus."},
+        "30": {"code": "Q30", "title": "Event Bus - Dead Letter Queue", "description": "Where do failed events go if subscriber can't be reached?", "expected": "Currently no DLQ; events are dropped (best-effort design)", "category": "Event Bus", "difficulty": "Expert", "prompt": "Trigger subscriber failure with no DLQ."},
+        "31": {"code": "Q31", "title": "Health Scoring - Score Calculation Formula", "description": "How is the health score computed from trace/pattern data?", "expected": "Weighted sum of availability, latency, error rate, drift over time window", "category": "Health Scoring", "difficulty": "Easy", "prompt": "Query health score calculation."},
+        "32": {"code": "Q32", "title": "Health Scoring - Time Window Selection", "description": "Why is a 24-hour window used for health scoring instead of 1-hour or 1-week?", "expected": "24h balances short-term anomalies with long-term trends", "category": "Health Scoring", "difficulty": "Easy", "prompt": "Discuss health scoring window."},
+        "33": {"code": "Q33", "title": "Health Scoring - Recurrence Penalty", "description": "How are recurring failures weighted differently from one-time failures?", "expected": "Recurrence multiplier increases penalty; e.g., 2x for 3rd occurrence in window", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Test recurrence penalty."},
+        "34": {"code": "Q34", "title": "Health Scoring - Recovery Time", "description": "How long does it take for health score to recover after a failure?", "expected": "Proportional to window size; if failure at start of 24h window, recovery at +24h", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Measure health score recovery time."},
+        "35": {"code": "Q35", "title": "Health Scoring - Trend Analysis", "description": "Can health trends show degradation before failures occur?", "expected": "Yes; moving average can detect upward trend in error rate", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Analyze health trend."},
+        "36": {"code": "Q36", "title": "Health Scoring - Per-Agent Scoring", "description": "Should health be scored per-agent or per-app?", "expected": "Per-agent; agents have different models/prompts; aggregated at app level", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Query per-agent health scores."},
+        "37": {"code": "Q37", "title": "Health Scoring - SLA Compliance", "description": "Can Kakveda help track SLA compliance based on health scores?", "expected": "Yes; SLA = uptime % > 99.9%; health scoring supports this", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Calculate SLA compliance."},
+        "38": {"code": "Q38", "title": "Health Scoring - Anomaly Detection", "description": "When should a health score trigger an alert?", "expected": "Alert if score drops below threshold (e.g., 70) or delta > 20% in 1h", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Configure alert thresholds."},
+        "39": {"code": "Q39", "title": "Health Scoring - Dashboard Visualization", "description": "How should health trends be visualized in the dashboard?", "expected": "Time-series chart with score line; failure events marked as red dots", "category": "Health Scoring", "difficulty": "Hard", "prompt": "View health visualization."},
+        "40": {"code": "Q40", "title": "Health Scoring - Weighted Model Selection", "description": "How are weights chosen for different failure types in health scoring?", "expected": "Based on business impact; critical failures weight higher than warnings", "category": "Health Scoring", "difficulty": "Expert", "prompt": "Tune health scoring weights."},
+        "41": {"code": "Q41", "title": "Integration & Architecture - Multi-Agent Flow", "description": "How do multiple agents (e.g., retrieval, reasoning) interact in Kakveda?", "expected": "Each agent logs to Kakveda via HTTP ingest API; traces aggregated per app", "category": "Integration & Architecture", "difficulty": "Easy", "prompt": "Register multiple agents."},
+        "42": {"code": "Q42", "title": "Integration & Architecture - API Key Security", "description": "How are API keys for Kakveda ingest protected?", "expected": "Keys hashed in DB; rotatable; scoped to projects; can be revoked", "category": "Integration & Architecture", "difficulty": "Easy", "prompt": "Create and rotate API key."},
+        "43": {"code": "Q43", "title": "Integration & Architecture - Docker Network Isolation", "description": "How are services isolated in Docker Compose?", "expected": "Shared 'kakveda' network; services reach each other via hostname DNS", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Test inter-service communication."},
+        "44": {"code": "Q44", "title": "Integration & Architecture - Database Migration", "description": "How are schema changes deployed without downtime?", "expected": "Migrations are versioned; run before service restart; backward compatible", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Apply database migration."},
+        "45": {"code": "Q45", "title": "Integration & Architecture - Scaling Scenarios", "description": "How does Kakveda scale to 1M+ traces per day?", "expected": "Distributed ingestion with load balancer; SQLite limits growth; consider PostgreSQL", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Discuss scaling strategy."},
+        "46": {"code": "Q46", "title": "Integration & Architecture - Monitoring & Observability", "description": "What metrics should be monitored for Kakveda health?", "expected": "Latency (preflight, ingest), error rates, GFKB size, event bus throughput, DB query time", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Query Kakveda metrics."},
+        "47": {"code": "Q47", "title": "Integration & Architecture - Fallback & Failover", "description": "What happens if the primary dashboard service goes down?", "expected": "Ingest still works via separate service; dashboard provides UI; agent continues", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Simulate dashboard downtime."},
+        "48": {"code": "Q48", "title": "Integration & Architecture - Cost Optimization", "description": "How can Kakveda deployment costs be minimized?", "expected": "Self-hosted on K8s/VMs; avoid excessive logging; prune old data; use cheaper storage", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Optimize deployment costs."},
+        "49": {"code": "Q49", "title": "Integration & Architecture - Backup & Disaster Recovery", "description": "How should Kakveda data (traces, patterns) be backed up?", "expected": "Daily DB snapshots; event logs to durable storage (S3, GCS); RTO < 1h", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Test disaster recovery."},
+        "50": {"code": "Q50", "title": "Integration & Architecture - Compliance & Audit", "description": "How does Kakveda support compliance (GDPR, HIPAA, SOC2)?", "expected": "Audit logs of all operations; data retention policies; encryption at rest/transit", "category": "Integration & Architecture", "difficulty": "Expert", "prompt": "Review compliance features."}
+    }
+    
+    return scenarios_data
+
+
 @app.get("/scenarios", response_class=HTMLResponse)
+
 async def scenarios_page(request: Request, user: dict[str, Any] = Depends(require_login)):
     if isinstance(user, RedirectResponse):
         return user
@@ -2076,6 +2156,7 @@ async def scenarios_page(request: Request, user: dict[str, Any] = Depends(requir
             {
                 "id": r.id,
                 "ts": r.ts,
+                "scenario_code": r.scenario_code,
                 "app_id": r.app_id,
                 "agent_id": r.agent_id,
                 "prompt": r.prompt,
@@ -2097,6 +2178,7 @@ async def run_scenario(
     user: dict[str, Any] = Depends(require_login),
     app_id: str = Form(...),
     prompt: str = Form(...),
+    scenario_id: int = Form(None),
 ):
     if isinstance(user, RedirectResponse):
         return user
@@ -2140,7 +2222,24 @@ async def run_scenario(
 
     # store locally for dashboard history views
     with get_session() as s:
-        sr = ScenarioRun(app_id=app_id, agent_id=agent_id, prompt=prompt, note="ran from dashboard")
+        # Load scenario data if scenario_id provided
+        scenario_code = None
+        expected_behavior = None
+        if scenario_id:
+            scenario = s.query(Scenario).filter(Scenario.id == scenario_id).first()
+            if scenario:
+                scenario_code = scenario.code
+                expected_behavior = scenario.expected_behavior
+        
+        sr = ScenarioRun(
+            app_id=app_id, 
+            agent_id=agent_id, 
+            prompt=prompt, 
+            scenario_id=scenario_id,
+            scenario_code=scenario_code,
+            expected_behavior=expected_behavior,
+            note="ran from dashboard"
+        )
         s.add(sr)
         s.flush()
 
@@ -2331,15 +2430,25 @@ async def eval_run(
         er = EvaluationRun(dataset_id=dataset_id, name=f"eval:{dataset.name}")
         s.add(er)
         s.flush()
+        s.commit()
+        
+        # Extract IDs to avoid DetachedInstanceError when accessing outside session
+        eval_run_id = er.id
+        
+        # Extract example data while still in session to avoid DetachedInstanceError
+        examples_data = [
+            {"id": ex.id, "app_id": ex.app_id, "input_json": ex.input_json}
+            for ex in examples
+        ]
 
     # Run examples outside the session while calling external services
     passed_count = 0
     results: list[dict[str, Any]] = []
     async with httpx.AsyncClient(timeout=10.0) as client:
-        for ex in examples:
-            ex_input = json.loads(ex.input_json or "{}")
+        for ex in examples_data:
+            ex_input = json.loads(ex["input_json"] or "{}")
             prompt = str(ex_input.get("prompt") or "")
-            app_id = ex.app_id
+            app_id = ex["app_id"]
 
             started = datetime.now(timezone.utc)
             wresp = await client.post(
@@ -2347,7 +2456,7 @@ async def eval_run(
                 json={"app_id": app_id, "agent_id": agent_id, "prompt": prompt, "tools": [], "env": {"os": "linux"}},
             )
             warn = wresp.json()
-            response_text = await ollama_generate(prompt)
+            response_text, gen_meta = await ollama_generate_with_meta(prompt)
             duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
 
             det = _deterministic_eval_citation_hallucination(response_text)
@@ -2364,16 +2473,16 @@ async def eval_run(
                     agent_id=agent_id,
                     name="eval.example",
                     status="completed",
-                    input_json=json.dumps({"prompt": prompt, "dataset_example_id": ex.id}),
-                    output_json=json.dumps({"response": response_text, "warn": warn, "det_eval": det}),
+                    input_json=json.dumps({"prompt": prompt, "dataset_example_id": ex["id"]}),
+                    output_json=json.dumps({"response": response_text, "warn": warn, "det_eval": det, "gen": gen_meta}),
                     duration_ms=duration_ms,
                 )
                 s.add(tr)
                 s.flush()
                 s.add(
                     EvaluationResult(
-                        eval_run_id=er.id,
-                        dataset_example_id=ex.id,
+                        eval_run_id=eval_run_id,
+                        dataset_example_id=ex["id"],
                         trace_run_id=tr.id,
                         score=score,
                         passed=passed,
@@ -2381,16 +2490,16 @@ async def eval_run(
                     )
                 )
                 s.commit()
-                results.append({"example_id": ex.id, "trace_run_id": tr.id, "passed": passed})
+                results.append({"example_id": ex["id"], "trace_run_id": tr.id, "passed": passed})
 
     with get_session() as s:
-        total = len(examples)
+        total = len(examples_data)
         summary = {"dataset_id": dataset_id, "total": total, "passed": passed_count, "pass_rate": (passed_count / total) if total else 0}
-        s.query(EvaluationRun).filter(EvaluationRun.id == er.id).update({"summary_json": json.dumps(summary)})
+        s.query(EvaluationRun).filter(EvaluationRun.id == eval_run_id).update({"summary_json": json.dumps(summary)})
         s.add(AuditEvent(actor_email=user.get("email"), action="eval_run", details=f"dataset_id={dataset_id} total={total} passed={passed_count}"))
         s.commit()
 
-    return RedirectResponse(url=f"/eval/{er.id}", status_code=302)
+    return RedirectResponse(url=f"/eval/{eval_run_id}", status_code=302)
 
 
 @app.get("/eval/{eval_id}", response_class=HTMLResponse)
@@ -2674,31 +2783,24 @@ async def reset_submit(request: Request, token: str = Form(...), password: str =
 
 @app.get("/admin/audit", response_class=HTMLResponse)
 async def audit_page(request: Request, user: dict[str, Any] = Depends(require_roles([ROLE_ADMIN]))):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    
     with get_session() as s:
         events = (
             s.query(AuditEvent)
             .order_by(AuditEvent.ts.desc())
-            .limit(50)
+            .limit(100)
             .all()
         )
-
-    # quick inline HTML table (kept minimal)
-    rows = "".join(
-        f"<tr><td>{e.ts}</td><td>{e.actor_email or ''}</td><td>{e.action}</td><td>{e.details}</td></tr>"
-        for e in events
+    
+    return templates.TemplateResponse(
+        "audit.html",
+        {"request": request, "email": email, "role": role, "events": events},
     )
-    html = f"""
-    <html><head><meta charset='utf-8'/><title>Audit</title></head>
-    <body style='font-family:system-ui;background:#0b1220;color:#e6edf3;'>
-      <h2>Audit events (admin)</h2>
-      <p><a style='color:#93c5fd' href='/'>Back</a></p>
-      <table border='1' cellpadding='6' style='border-collapse:collapse;border-color:#24304a;'>
-        <tr><th>ts</th><th>actor</th><th>action</th><th>details</th></tr>
-        {rows}
-      </table>
-    </body></html>
-    """
-    return HTMLResponse(html)
 
 
 @app.get("/admin/users", response_class=HTMLResponse)

@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Audit Logs – Kakveda</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .brand strong { font-size: 1.3em; color: #60a5fa; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .content { padding: 24px; max-width: 1600px; margin: 0 auto; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+    .card h2 { margin: 0 0 16px 0; font-size: 1.4em; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; }
+    thead th { background: rgba(0,0,0,0.3); padding: 12px 14px; font-weight: 600; font-size: 0.8em; text-transform: uppercase; color: var(--muted); text-align: left; }
+    thead th:first-child { border-radius: 8px 0 0 0; }
+    thead th:last-child { border-radius: 0 8px 0 0; }
+    tbody tr:hover { background: rgba(37,99,235,0.06); }
+    tbody td { padding: 12px 14px; border-bottom: 1px solid rgba(36,48,74,0.5); }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:last-child td:first-child { border-radius: 0 0 0 8px; }
+    tbody tr:last-child td:last-child { border-radius: 0 0 8px 0; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: rgba(255,255,255,0.05); color: inherit; cursor: pointer; font-weight: 500; }
+    .btn:hover { background: rgba(37,99,235,0.15); }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    .action-admin { background: rgba(251,113,133,0.14); border-color: rgba(251,113,133,0.30); color: #fca5a5; }
+    .action-create { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: #86efac; }
+    .action-delete { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); color: #fca5a5; }
+    .action-update { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.4); color: #fcd34d; }
+    .ts-cell { color: var(--muted); font-size: 0.9em; }
+    @media (max-width: 1000px) { .content { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      {% if role == 'admin' %}<span class="pill" style="background: rgba(251,113,133,0.14); border:1px solid rgba(251,113,133,0.30); font-size:0.75em;">ADMIN</span>{% endif %}
+    </div>
+    <div class="nav">
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/agents">Agents</a>
+        <a href="/runs">Runs</a>
+        <a href="/scenarios">Scenarios</a>
+        <a href="/playground">Playground</a>
+        <a href="/warnings">Warnings</a>
+        <a href="/datasets">Datasets</a>
+        <a href="/prompts">Prompts</a>
+        <a href="/eval">Eval</a>
+        <a href="/experiments">Experiments</a>
+        <a href="/projects">Projects</a>
+        {% if role == 'admin' %}<a href="/admin/users">Admin</a>{% endif %}
+        {% if role == 'admin' %}<a href="/admin/audit" class="active">Audit</a>{% endif %}
+      </div>
+      <form method="post" action="/auth/logout" style="display:inline-block; margin-left:8px;">
+        {{ csrf_input(request) | safe }}
+        <button class="btn" type="submit" style="padding:8px 16px;">Logout</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="content">
+    <div class="card">
+      <h2>Audit Events (Admin Only)</h2>
+      <p style="color: var(--muted); margin: 0 0 16px 0;">Track all actions performed in the system by users and admin.</p>
+      
+      {% if events %}
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 20%;">Timestamp</th>
+              <th style="width: 20%;">Actor (Email)</th>
+              <th style="width: 20%;">Action</th>
+              <th style="width: 40%;">Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for event in events %}
+              <tr>
+                <td class="ts-cell">{{ event.ts }}</td>
+                <td>{{ event.actor_email or 'system' }}</td>
+                <td>
+                  <span class="pill {% if 'admin' in event.action.lower() %}action-admin{% elif 'delete' in event.action.lower() %}action-delete{% elif 'update' in event.action.lower() or 'edit' in event.action.lower() %}action-update{% else %}action-create{% endif %}">
+                    {{ event.action }}
+                  </span>
+                </td>
+                <td style="font-size: 0.9em; color: var(--muted);">{{ event.details }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="text-align: center; color: var(--muted); padding: 40px 20px;">No audit events found.</p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

@@ -159,6 +159,20 @@ class AuditEvent(Base):
     details: Mapped[str] = mapped_column(Text)
 
 
+class Scenario(Base):
+    """Predefined test scenarios for dashboard testing and demos."""
+    __tablename__ = "scenarios"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(16), unique=True, index=True)  # Q1, Q2, ..., Q50
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text)
+    expected_behavior: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(64))  # Preflight Validation, GFKB & Pattern Matching, etc.
+    difficulty: Mapped[str] = mapped_column(String(32))  # Easy, Medium, Hard, Expert
+    default_prompt: Mapped[str] = mapped_column(Text)
+
+
 class ScenarioRun(Base):
     __tablename__ = "scenario_runs"
 
@@ -167,6 +181,9 @@ class ScenarioRun(Base):
     app_id: Mapped[str] = mapped_column(String(64), index=True)
     agent_id: Mapped[str] = mapped_column(String(64), index=True)
     prompt: Mapped[str] = mapped_column(Text)
+    scenario_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("scenarios.id"), nullable=True)
+    scenario_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    expected_behavior: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

@@ -8,9 +8,28 @@
     header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items:center; }
     .wrap { padding: 18px; }
     .small { color: var(--muted); font-size: 0.9em; }
-    .grid { display:grid; grid-template-columns: 1fr 1fr 120px; gap: 12px; align-items:end; }
-    /* keep a small pill style for app badges */
+    .grid { display:grid; grid-template-columns: 1fr 1fr 1fr 1fr 120px; gap: 12px; align-items:end; }
     .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(37,99,235,.12); border: 1px solid rgba(37,99,235,.35); }
+    
+    /* Scenario Selector Styling */
+    .info-badge { display: inline-block; background: rgba(37,99,235,.2); color: rgba(59,130,246,1); padding: 2px 8px; border-radius: 3px; font-size: 0.85em; font-weight: 500; margin-left: 6px; }
+    #scenarioSelect { background: var(--input-bg); color: var(--text); }
+    #scenarioSelect option { background: #2a2a3a; color: #e0e0e0; }
+    #scenarioSelect optgroup { background: #2a2a3a; color: #e0e0e0; font-weight: 600; }
+    
+    /* Scenario Details Styling */
+    .scenario-details { background: linear-gradient(135deg, rgba(34,197,94,.05) 0%, rgba(16,185,129,.05) 100%); border-left: 3px solid rgba(34,197,94,.5); border-radius: 4px; padding: 14px; margin-top: 14px; font-size: 0.95em; display: none; }
+    .scenario-details.active { display: block; animation: slideIn 0.2s ease-out; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .scenario-details-row { margin: 10px 0; display: grid; grid-template-columns: 140px 1fr; gap: 12px; }
+    .scenario-details-label { font-weight: 700; color: rgba(34,197,94,.8); white-space: nowrap; }
+    .scenario-details-label::after { content: ':'; }
+    
+    .difficulty-easy { color: rgba(34,197,94,1); font-weight: 600; }
+    .difficulty-medium { color: rgba(245,158,11,1); font-weight: 600; }
+    .difficulty-hard { color: rgba(239,68,68,1); font-weight: 600; }
+    .difficulty-expert { color: rgba(168,85,247,1); font-weight: 600; }
   </style>
 </head>
 <body>
@@ -36,7 +55,7 @@
 
   <div class="wrap">
     <div class="card">
-      <h3>Run a scenario</h3>
+      <h3>Run a Scenario</h3>
       <form method="post" action="/scenarios/run">
         {{ csrf_input(request) | safe }}
         <div class="grid">
@@ -50,22 +69,118 @@
           </div>
           <div>
             <label>Prompt</label>
-            <input name="prompt" value="Summarize this document and include citations even if not provided." />
+            <input name="prompt" id="promptInput" value="Summarize this document and include citations even if not provided." />
+          </div>
+          <div>
+            <label>Scenario <span class="info-badge">50 questions</span></label>
+            <select name="scenario_id" id="scenarioSelect" onchange="loadScenario(this.options[this.selectedIndex].getAttribute('data-code'))">>
+              <option value="">-- Choose a scenario to test --</option>
+              <optgroup label="Preflight Validation">
+                <option value="1" data-code="Q1">Q1: Early Detection</option>
+                <option value="2" data-code="Q2">Q2: Threshold Decision</option>
+                <option value="3" data-code="Q3">Q3: Fingerprinting</option>
+                <option value="4" data-code="Q4">Q4: Graceful Degradation</option>
+                <option value="5" data-code="Q5">Q5: Policy Override</option>
+                <option value="6" data-code="Q6">Q6: False Positive Problem</option>
+                <option value="7" data-code="Q7">Q7: Real-time Config Change</option>
+                <option value="8" data-code="Q8">Q8: Multi-Model Scenario</option>
+                <option value="9" data-code="Q9">Q9: Tool Context Matching</option>
+                <option value="10" data-code="Q10">Q10: Confidence Score Usage</option>
+              </optgroup>
+              <optgroup label="GFKB & Pattern Matching">
+                <option value="11" data-code="Q11">Q11: Knowledge Base Growth</option>
+                <option value="12" data-code="Q12">Q12: Pattern Auto-Creation</option>
+                <option value="13" data-code="Q13">Q13: Pattern Interference</option>
+                <option value="14" data-code="Q14">Q14: Cold Start Problem</option>
+                <option value="15" data-code="Q15">Q15: Outdated Pattern</option>
+                <option value="16" data-code="Q16">Q16: Multi-App Pattern</option>
+                <option value="17" data-code="Q17">Q17: Semantic Drift</option>
+                <option value="18" data-code="Q18">Q18: Pattern Explosion</option>
+                <option value="19" data-code="Q19">Q19: Missing Failure Type</option>
+                <option value="20" data-code="Q20">Q20: Cross-Domain Pattern</option>
+              </optgroup>
+              <optgroup label="Event Bus">
+                <option value="21" data-code="Q21">Q21: Subscribe/Publish Timing</option>
+                <option value="22" data-code="Q22">Q22: Service Downtime During Publish</option>
+                <option value="23" data-code="Q23">Q23: Cascading Events</option>
+                <option value="24" data-code="Q24">Q24: Event Deduplication</option>
+                <option value="25" data-code="Q25">Q25: Topic Wildcard Scenario</option>
+                <option value="26" data-code="Q26">Q26: Callback URL Validation</option>
+                <option value="27" data-code="Q27">Q27: Event Bus Persistence</option>
+                <option value="28" data-code="Q28">Q28: Fan-out Latency</option>
+                <option value="29" data-code="Q29">Q29: Circular Event Loop</option>
+                <option value="30" data-code="Q30">Q30: Event Ordering Guarantee</option>
+              </optgroup>
+              <optgroup label="Health Scoring">
+                <option value="31" data-code="Q31">Q31: Health Score Calculation</option>
+                <option value="32" data-code="Q32">Q32: Window Size Problem</option>
+                <option value="33" data-code="Q33">Q33: Recurrence Penalty</option>
+                <option value="34" data-code="Q34">Q34: Recovery Time Estimation</option>
+                <option value="35" data-code="Q35">Q35: Multi-Severity Scoring</option>
+                <option value="36" data-code="Q36">Q36: Score Below Zero</option>
+                <option value="37" data-code="Q37">Q37: Health Trend Interpretation</option>
+                <option value="38" data-code="Q38">Q38: Comparing Health Across Apps</option>
+                <option value="39" data-code="Q39">Q39: Synthetic Test Impact</option>
+                <option value="40" data-code="Q40">Q40: Health Score Reset</option>
+              </optgroup>
+              <optgroup label="Integration & Architecture">
+                <option value="41" data-code="Q41">Q41: Agent Integration Flow</option>
+                <option value="42" data-code="Q42">Q42: Trace Ingestion</option>
+                <option value="43" data-code="Q43">Q43: API Key Management</option>
+                <option value="44" data-code="Q44">Q44: Docker Network Isolation</option>
+                <option value="45" data-code="Q45">Q45: Port Conflict Resolution</option>
+                <option value="46" data-code="Q46">Q46: Database Migration</option>
+                <option value="47" data-code="Q47">Q47: Hot Reload Configuration</option>
+                <option value="48" data-code="Q48">Q48: Scaling Horizontal</option>
+                <option value="49" data-code="Q49">Q49: Monitoring & Observability</option>
+                <option value="50" data-code="Q50">Q50: Production Readiness</option>
+              </optgroup>
+            </select>
           </div>
           <div>
             <button class="btn" type="submit">Run</button>
           </div>
         </div>
+        
+        <!-- Scenario Details Section -->
+        <div id="scenarioDetails" class="scenario-details">
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Code</span>
+            <span id="scenarioCode" style="font-weight: 600; color: rgba(37,99,235,1);"></span>
+          </div>
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Title</span>
+            <span id="scenarioTitle" style="font-weight: 600;"></span>
+          </div>
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Category</span>
+            <span id="scenarioCategory" style="display: inline-block; background: rgba(59,130,246,.15); padding: 6px 12px; border-radius: 4px; font-size: 0.9em; color: rgba(59,130,246,1);"></span>
+          </div>
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Difficulty</span>
+            <span id="scenarioDifficulty"></span>
+          </div>
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Description</span>
+            <span id="scenarioDescription" style="display: block; color: rgba(255,255,255,.85); line-height: 1.5;"></span>
+          </div>
+          <div class="scenario-details-row">
+            <span class="scenario-details-label">Expected</span>
+            <span id="scenarioExpected" style="display: block; color: rgba(34,197,94,.85); line-height: 1.5;"></span>
+          </div>
+        </div>
+        
         <p class="small">This runs the same flow as `scripts/demo_client.py`: call `/warn`, store it, then `/ingest` a trace (Ollama if available, else stub).</p>
       </form>
 
       <h3 style="margin-top:18px;">Latest runs</h3>
       <table>
-        <thead><tr><th>When</th><th>App</th><th>Agent</th><th>Prompt</th><th>Open</th><th>Note</th></tr></thead>
+        <thead><tr><th>When</th><th>Scenario</th><th>App</th><th>Agent</th><th>Prompt</th><th>Open</th><th>Note</th></tr></thead>
         <tbody>
           {% for r in runs %}
           <tr>
             <td class="small">{{ r.ts }}</td>
+            <td class="small">{{ r.scenario_code or '—' }}</td>
             <td><span class="pill">{{ r.app_id }}</span></td>
             <td class="small">{{ r.agent_id }}</td>
             <td>{{ r.prompt }}</td>
@@ -83,5 +198,88 @@
       </table>
     </div>
   </div>
+
+  <script>
+    // All 50 scenarios data indexed by Q-code
+    const scenariosData = {
+      "Q1": {"title": "Preflight Validation - Early Detection", "description": "Can the preflight service detect a known failure pattern before it reaches the user?", "expected": "Preflight returns a warning with matching pattern from GFKB", "category": "Preflight Validation", "difficulty": "Easy", "prompt": "Explain the concept of machine learning without citations."},
+      "Q2": {"title": "Preflight Validation - Threshold Decision", "description": "How does the system behave when similarity score is at different thresholds?", "expected": "Score >= 0.8 triggers warning, < 0.8 allows execution", "category": "Preflight Validation", "difficulty": "Easy", "prompt": "Summarize a technical paper without providing sources."},
+      "Q3": {"title": "Preflight Validation - Fingerprinting", "description": "How does fingerprinting differentiate similar prompts?", "expected": "Fingerprints are unique per prompt hash; collisions are cryptographically unlikely", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Generate a response similar to known failure pattern Q3."},
+      "Q4": {"title": "Preflight Validation - Graceful Degradation", "description": "What happens when GFKB service is unavailable during preflight?", "expected": "Preflight times out gracefully and allows request (fail-open)", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Explain AI safety in a way that might trigger false positives."},
+      "Q5": {"title": "Preflight Validation - Policy Override", "description": "Can operators override preflight warnings for specific patterns?", "expected": "Policy can be disabled per app in warning-policy service", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Test prompt matching multiple patterns."},
+      "Q6": {"title": "Preflight Validation - False Positive Prevention", "description": "How can false warnings at 0.8 threshold be prevented?", "expected": "Admin can override warnings for validated requests; adjust threshold", "category": "Preflight Validation", "difficulty": "Medium", "prompt": "Request that might trigger false warnings."},
+      "Q7": {"title": "Preflight Validation - Real-time Config Change", "description": "When config is updated, how quickly does preflight apply changes?", "expected": "Changes take effect on next request; hot reload every 2s", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Test scenario with config changes."},
+      "Q8": {"title": "Preflight Validation - Multi-Model Scenario", "description": "Should preflight threshold differ between models (GPT-4 vs Ollama)?", "expected": "Can be configured per model; safer models use higher thresholds", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Test with different model configurations."},
+      "Q9": {"title": "Preflight Validation - Tool Context Matching", "description": "How do available tools affect pattern matching?", "expected": "Same prompt + different tools can match different patterns", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Test with multiple tool combinations."},
+      "Q10": {"title": "Preflight Validation - Confidence Score Usage", "description": "How should confidence scores guide UI/dashboard behavior?", "expected": "Color code warnings; sort by confidence; optionally show to users", "category": "Preflight Validation", "difficulty": "Hard", "prompt": "Analyze confidence score variations."},
+      "Q11": {"title": "GFKB & Pattern Matching - Knowledge Base Growth", "description": "How does system performance scale with 10K+ failures in GFKB?", "expected": "TF-IDF vectorization is O(n); scales linearly with pattern count", "category": "GFKB & Pattern Matching", "difficulty": "Easy", "prompt": "Test GFKB scaling."},
+      "Q12": {"title": "GFKB & Pattern Matching - Pattern Auto-Creation", "description": "When are patterns automatically added to GFKB?", "expected": "After 3-5 confirmed similar failures or manual admin approval", "category": "GFKB & Pattern Matching", "difficulty": "Easy", "prompt": "Trigger automatic pattern creation."},
+      "Q13": {"title": "GFKB & Pattern Matching - Pattern Interference", "description": "How are conflicting patterns resolved?", "expected": "Highest similarity match is selected; overlap managed by threshold", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Test overlapping failure patterns."},
+      "Q14": {"title": "GFKB & Pattern Matching - Cold Start Problem", "description": "How many failures are needed before patterns become useful?", "expected": "3-5 failures minimum; warmup period of ~24 hours recommended", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Test cold start behavior."},
+      "Q15": {"title": "GFKB & Pattern Matching - Outdated Pattern Scenario", "description": "How are obsolete patterns managed?", "expected": "Admin can deprecate patterns; auto-deprecation after 6 months unused", "category": "GFKB & Pattern Matching", "difficulty": "Medium", "prompt": "Test pattern deprecation workflow."},
+      "Q16": {"title": "GFKB & Pattern Matching - Multi-App Pattern", "description": "Should patterns apply across all apps or be app-specific?", "expected": "Global GFKB with optional app-specific overrides for better precision", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test cross-app pattern sharing."},
+      "Q17": {"title": "GFKB & Pattern Matching - Semantic Drift", "description": "How does pattern matching handle prompt changes?", "expected": "Semantic similarity adapts; old failures may not match after prompt drift", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test semantic drift detection."},
+      "Q18": {"title": "GFKB & Pattern Matching - Pattern Explosion", "description": "How to manage excessive pattern creation?", "expected": "Consolidate via merging; enforce minimum occurrence threshold", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test pattern consolidation."},
+      "Q19": {"title": "GFKB & Pattern Matching - Missing Failure Type", "description": "What happens when failure_type is None/unknown?", "expected": "Fallback to semantic similarity; classify type from failure description", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Test with unknown failure types."},
+      "Q20": {"title": "GFKB & Pattern Matching - Cross-Domain Pattern Matching", "description": "Should medical AI and customer support share patterns?", "expected": "Separate GFKB instances recommended; different domains = different patterns", "category": "GFKB & Pattern Matching", "difficulty": "Hard", "prompt": "Compare cross-domain patterns."},
+      "Q21": {"title": "Event Bus - Subscribe/Publish Timing", "description": "What is the event bus latency from publish to subscriber?", "expected": "< 50ms for local subscribers; HTTP fan-out adds network latency", "category": "Event Bus", "difficulty": "Easy", "prompt": "Measure event bus latency."},
+      "Q22": {"title": "Event Bus - Service Downtime During Publish", "description": "What happens to events if subscriber is down?", "expected": "Events are best-effort; no retry; subscriber must implement polling", "category": "Event Bus", "difficulty": "Easy", "prompt": "Stop subscriber service during event."},
+      "Q23": {"title": "Event Bus - Cascading Events", "description": "Can failed event handlers trigger cascading failures?", "expected": "No; errors isolated per subscriber; each handles independently", "category": "Event Bus", "difficulty": "Medium", "prompt": "Trigger error in event handler."},
+      "Q24": {"title": "Event Bus - Event Deduplication", "description": "Are duplicate events prevented automatically?", "expected": "No built-in deduplication; subscribers must implement idempotency", "category": "Event Bus", "difficulty": "Medium", "prompt": "Publish duplicate events."},
+      "Q25": {"title": "Event Bus - Topic Wildcard Scenario", "description": "Can subscribers listen to multiple topics with wildcards?", "expected": "Current implementation doesn't support wildcards; explicit subscription required", "category": "Event Bus", "difficulty": "Medium", "prompt": "Test topic wildcard support."},
+      "Q26": {"title": "Event Bus - Callback URL Validation", "description": "What prevents malicious callback registrations?", "expected": "Callbacks validated; can be restricted to internal URLs; audit logging", "category": "Event Bus", "difficulty": "Hard", "prompt": "Test callback validation."},
+      "Q27": {"title": "Event Bus - Event Bus Persistence", "description": "Are events persisted if system crashes?", "expected": "No; in-memory only; events lost on restart (fail-open design)", "category": "Event Bus", "difficulty": "Hard", "prompt": "Simulate system crash with pending events."},
+      "Q28": {"title": "Event Bus - Fan-out Latency", "description": "Does slow subscriber block others?", "expected": "No; asyncio.gather() runs parallel; slow subs don't block others", "category": "Event Bus", "difficulty": "Hard", "prompt": "Test fan-out with slow subscriber."},
+      "Q29": {"title": "Event Bus - Circular Event Loop", "description": "Can circular subscriptions create infinite loops?", "expected": "Yes; must prevent via topic design and subscriber logic", "category": "Event Bus", "difficulty": "Hard", "prompt": "Create circular event subscription."},
+      "Q30": {"title": "Event Bus - Event Ordering Guarantee", "description": "Are events processed in order?", "expected": "No; in-memory pub/sub is best-effort; order not guaranteed", "category": "Event Bus", "difficulty": "Hard", "prompt": "Test event ordering."},
+      "Q31": {"title": "Health Scoring - Health Score Calculation", "description": "What formula is used to compute health score?", "expected": "Weighted sum of availability, latency, error rate over time window", "category": "Health Scoring", "difficulty": "Easy", "prompt": "Query health score calculation."},
+      "Q32": {"title": "Health Scoring - Window Size Problem", "description": "Is 10-execution window representative of health?", "expected": "24-hour window better balances short-term anomalies and trends", "category": "Health Scoring", "difficulty": "Easy", "prompt": "Discuss health scoring window."},
+      "Q33": {"title": "Health Scoring - Recurrence Penalty Scenario", "description": "How much should recurring failures be penalized?", "expected": "Penalty increases with recurrence; (count-1)*2.5 is current formula", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Test recurrence penalty."},
+      "Q34": {"title": "Health Scoring - Recovery Time Estimation", "description": "How is recovery time tracked after failures?", "expected": "Estimated as avg_recovery_time_sec; currently set to 30 + 10*penalty", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Measure health score recovery time."},
+      "Q35": {"title": "Health Scoring - Multi-Severity Scoring", "description": "Are high-severity failures weighted more heavily?", "expected": "Yes; HIGH failures weighted 7x, LOW failures weighted 1x", "category": "Health Scoring", "difficulty": "Medium", "prompt": "Test multi-severity scoring."},
+      "Q36": {"title": "Health Scoring - Score Below Zero", "description": "What does a negative score mean?", "expected": "Clipped to 0; indicates severe degradation; all penalties exhausted", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Generate negative health score."},
+      "Q37": {"title": "Health Scoring - Health Trend Interpretation", "description": "How should downward trends be interpreted?", "expected": "Indicates degradation; alert if trend persists; investigate root causes", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Analyze health trend."},
+      "Q38": {"title": "Health Scoring - Comparing Health Across Apps", "description": "Can you compare health scores directly between apps?", "expected": "With normalization; baseline differences per app must be considered", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Compare app health scores."},
+      "Q39": {"title": "Health Scoring - Synthetic Test Impact", "description": "Should synthetic tests affect real health scores?", "expected": "No; should use separate metrics or filter from health calculation", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Test synthetic test isolation."},
+      "Q40": {"title": "Health Scoring - Health Score Reset", "description": "How to reset scores after incident resolution?", "expected": "Implement decay function; forget old failures after 7 days", "category": "Health Scoring", "difficulty": "Hard", "prompt": "Tune health score decay."},
+      "Q41": {"title": "Integration & Architecture - Agent Integration Flow", "description": "How do custom agents integrate with Kakveda?", "expected": "Call /warn on warning-policy, then /ingest with OpenTelemetry span", "category": "Integration & Architecture", "difficulty": "Easy", "prompt": "Register custom agent."},
+      "Q42": {"title": "Integration & Architecture - Trace Ingestion", "description": "How does ingestion parse OpenTelemetry spans?", "expected": "Extracts span attributes, finds failures, links to preflight warnings", "category": "Integration & Architecture", "difficulty": "Easy", "prompt": "Ingest OpenTelemetry trace."},
+      "Q43": {"title": "Integration & Architecture - API Key Management", "description": "How are API keys stored and rotated?", "expected": "Hashed in DB; rotatable; scoped to projects; can be revoked", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Rotate API key."},
+      "Q44": {"title": "Integration & Architecture - Docker Network Isolation", "description": "How are services isolated in Docker Compose?", "expected": "Shared 'kakveda' network; services reach each other via hostname", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Test inter-service communication."},
+      "Q45": {"title": "Integration & Architecture - Port Conflict Resolution", "description": "How to resolve port allocation conflicts?", "expected": "Map to different host ports; use expose vs ports; adjust network mode", "category": "Integration & Architecture", "difficulty": "Medium", "prompt": "Resolve port conflicts."},
+      "Q46": {"title": "Integration & Architecture - Database Migration", "description": "How to deploy schema changes without downtime?", "expected": "Versioned migrations; run before restart; maintain backward compatibility", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Apply database migration."},
+      "Q47": {"title": "Integration & Architecture - Hot Reload Configuration", "description": "Do config changes apply to in-flight requests?", "expected": "Hot reload polls every 2s; in-flight requests use old config", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Test hot reload behavior."},
+      "Q48": {"title": "Integration & Architecture - Scaling Horizontal", "description": "How to scale dashboard horizontally with shared database?", "expected": "Shared SQLite; watch for locking issues; prefer PostgreSQL for scale", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Deploy multiple dashboard instances."},
+      "Q49": {"title": "Integration & Architecture - Monitoring & Observability", "description": "What metrics should be monitored?", "expected": "Latency (preflight, ingest), error rates, GFKB size, event throughput", "category": "Integration & Architecture", "difficulty": "Hard", "prompt": "Query Kakveda metrics."},
+      "Q50": {"title": "Integration & Architecture - Production Readiness Checklist", "description": "What's needed for production deployment?", "expected": "Persistence strategy, backup/recovery, security audit, performance testing", "category": "Integration & Architecture", "difficulty": "Expert", "prompt": "Review production readiness."}
+    };
+
+    function loadScenario(code) {
+      if (!code || !scenariosData[code]) {
+        document.getElementById('scenarioDetails').classList.remove('active');
+        return;
+      }
+
+      const scenario = scenariosData[code];
+      
+      // Set difficulty color
+      let diffColor = 'difficulty-easy';
+      if (scenario.difficulty === 'Medium') diffColor = 'difficulty-medium';
+      else if (scenario.difficulty === 'Hard') diffColor = 'difficulty-hard';
+      else if (scenario.difficulty === 'Expert') diffColor = 'difficulty-expert';
+      
+      document.getElementById('scenarioCode').textContent = code;
+      document.getElementById('scenarioTitle').textContent = scenario.title;
+      document.getElementById('scenarioDescription').textContent = scenario.description;
+      document.getElementById('scenarioExpected').textContent = scenario.expected;
+      document.getElementById('scenarioCategory').textContent = scenario.category;
+      const diffElement = document.getElementById('scenarioDifficulty');
+      diffElement.textContent = scenario.difficulty;
+      diffElement.className = diffColor;
+      document.getElementById('promptInput').value = scenario.prompt;
+      document.getElementById('scenarioDetails').classList.add('active');
+    }
+  </script>
 </body>
 </html>
+

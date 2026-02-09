@@ -6,80 +6,222 @@
   <title>kakveda - Agents</title>
   <link rel="stylesheet" href="/static/style.css" />
   <style>
-    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    /* Header Navigation */
+    header { 
+      padding: 14px 18px; 
+      background: var(--bg); 
+      border-bottom: 1px solid var(--border); 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+    }
+    
+    .nav-links { display: flex; gap: 2px; align-items: center; }
+    .nav-links a, .nav-links button { padding: 8px 14px; border-radius: 6px; text-decoration: none; font-size: 0.9em; transition: all 0.2s; border: 1px solid transparent; }
+    .nav-links a:hover, .nav-links button:hover { background: rgba(37,99,235,0.1); color: var(--accent); }
+    .nav-links a.active { background: rgba(37,99,235,0.15); color: #2563eb; border-color: rgba(37,99,235,0.3); }
+    .nav-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+    
+    .dropdown { position: relative; display: inline-block; }
+    .dropdown-btn { padding: 8px 14px; background: rgba(37,99,235,0.06); border: 1px solid rgba(37,99,235,0.2); border-radius: 6px; cursor: pointer; color: var(--text); font-size: 0.9em; transition: all 0.2s; }
+    .dropdown-btn:hover { background: rgba(37,99,235,0.12); }
+    .dropdown-content { display: none; position: absolute; top: 100%; right: 0; background: var(--card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 1000; min-width: 180px; }
+    .dropdown-content a { display: block; padding: 10px 16px; color: var(--text); text-decoration: none; font-size: 0.9em; transition: all 0.2s; border-bottom: 1px solid var(--border); }
+    .dropdown-content a:last-child { border-bottom: none; }
+    .dropdown-content a:hover { background: rgba(37,99,235,0.1); color: var(--accent); }
+    .dropdown:hover .dropdown-content { display: block; }
+    
     .wrap { padding: 18px; }
-    .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 16px; }
-    .agent-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: all 0.2s; }
-    .agent-card:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-    .agent-name { font-size: 1.2em; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
-    .agent-status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+    
+    /* Stats Bar */
+    .stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+    .stat-value { font-size: 1.8em; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 0.85em; color: var(--muted); margin-top: 4px; }
+    
+    /* Search & Filters */
+    .controls { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+    .search-input { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); font-size: 0.9em; }
+    .search-input::placeholder { color: var(--muted); }
+    .filter-group { display: flex; gap: 8px; }
+    .filter-btn { padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; font-size: 0.85em; transition: all 0.2s; }
+    .filter-btn:hover { border-color: var(--accent); }
+    .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+    
+    /* Table View - for many agents */
+    .table-view { width: 100%; border-collapse: collapse; }
+    .table-view thead { background: rgba(37,99,235,0.06); }
+    .table-view th { padding: 12px; text-align: left; font-weight: 600; font-size: 0.85em; color: var(--muted); border-bottom: 1px solid var(--border); }
+    .table-view td { padding: 12px; border-bottom: 1px solid var(--border); }
+    .table-view tbody tr:hover { background: rgba(37,99,235,0.04); }
+    
+    .agent-name-cell { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+    .agent-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
     .agent-status.online { background: #22c55e; }
     .agent-status.offline { background: #ef4444; }
-    .agent-desc { color: var(--muted); font-size: 0.9em; margin-bottom: 12px; }
-    .agent-meta { font-size: 0.85em; color: var(--muted); }
-    .agent-caps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .cap-tag { background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.3); padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
-    .agent-actions { margin-top: 14px; display: flex; gap: 8px; }
-    .btn-sm { padding: 6px 12px; font-size: 0.85em; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-    .btn-sm:hover { background: var(--accent); color: white; border-color: var(--accent); }
-    .btn-test { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: #22c55e; }
-    .btn-playground { background: rgba(37,99,235,0.15); border-color: rgba(37,99,235,0.4); color: #2563eb; }
+    
+    .capabilities { display: flex; flex-wrap: wrap; gap: 4px; }
+    .cap-tag { background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.3); padding: 2px 6px; border-radius: 12px; font-size: 0.75em; }
+    
+    /* Pagination */
+    .pagination { display: flex; gap: 4px; justify-content: center; margin-top: 20px; align-items: center; }
+    .pagination button, .pagination a { padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); cursor: pointer; font-size: 0.85em; }
+    .pagination button:hover, .pagination a:hover { border-color: var(--accent); background: rgba(37,99,235,0.1); }
+    .pagination .active { background: var(--accent); color: white; border-color: var(--accent); }
+    .pagination .disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    /* Empty State */
     .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
     .empty-state h3 { margin-bottom: 10px; }
+    
+    /* Info Box */
+    .info-box { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; padding: 12px 16px; font-size: 0.9em; color: var(--text); margin-bottom: 16px; }
   </style>
 </head>
 <body>
   <header>
-    <div>
-      <strong>🤖 Agents</strong>
-      <span class="small">(role: {{ role }}, email: {{ email }})</span>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      {% if role == 'admin' %}<span class="pill" style="background: rgba(239,68,68,0.15); color: #ef4444; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">ADMIN</span>{% endif %}
     </div>
-    <div>
-      <a href="/">Dashboard</a> · <a href="/agents">Agents</a> · <a href="/playground">Playground</a> · <a href="/runs">Runs</a> · <a href="/scenarios">Scenarios</a> · <a href="/warnings">Warnings</a>
-      {% if role == 'admin' %} · <a href="/admin/users">Admin Panel</a>{% endif %}
+    <div class="nav">
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/agents" class="active">🤖 Agents</a>
+        <a href="/runs">Runs</a>
+        <a href="/scenarios">Scenarios</a>
+        <a href="/playground">Playground</a>
+        <a href="/warnings">Warnings</a>
+        
+        <div class="nav-divider"></div>
+        
+        <div class="dropdown">
+          <button class="dropdown-btn">⋯ More</button>
+          <div class="dropdown-content">
+            <a href="/datasets">Datasets</a>
+            <a href="/prompts">Prompts</a>
+            <a href="/eval">Eval</a>
+            <a href="/experiments">Experiments</a>
+            <a href="/projects">Projects</a>
+            {% if role == 'admin' %}<a href="/admin">Admin</a>{% endif %}
+          </div>
+        </div>
+      </div>
+      <form method="post" action="/auth/logout" style="display: inline;">
+        <button type="submit" style="padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--text); cursor: pointer; font-size: 0.9em;">Logout</button>
+      </form>
     </div>
   </header>
 
   <div class="wrap">
     <div class="card">
-      <h3>Registered Agents</h3>
+      <h3>🤖 Registered Agents</h3>
       <p class="small">External agents connected to Kakveda for monitoring and testing. Agents auto-register on startup or can be manually added via Admin Panel.</p>
       
       {% if agents %}
-      <div class="agent-grid">
-        {% for agent in agents %}
-        <div class="agent-card">
-          <div class="agent-name">
-            <span class="agent-status {{ 'online' if agent.enabled else 'offline' }}"></span>
-            {{ agent.name }}
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+          <div class="stat-card">
+            <div class="stat-value">{{ agents|length }}</div>
+            <div class="stat-label">Total Agents</div>
           </div>
-          <div class="agent-desc">{{ agent.description or 'No description' }}</div>
-          <div class="agent-meta">
-            <strong>URL:</strong> {{ agent.base_url }}<br>
-            <strong>Last Updated:</strong> {{ agent.updated_at[:19] if agent.updated_at else 'Unknown' }}
+          <div class="stat-card">
+            <div class="stat-value" style="color: #22c55e;">{{ agents|selectattr('enabled')|list|length }}</div>
+            <div class="stat-label">Online</div>
           </div>
-          {% if agent.capabilities %}
-          <div class="agent-caps">
-            {% for cap in agent.capabilities %}
-            <span class="cap-tag">{{ cap }}</span>
-            {% endfor %}
-          </div>
-          {% endif %}
-          <div class="agent-actions">
-            <a href="/playground?external_agent={{ agent.id }}" class="btn-sm btn-playground">🎮 Test in Playground</a>
-            <form action="/agents/{{ agent.id }}/test" method="post" style="display:inline">
-              {{ csrf_input(request) | safe }}
-              <button type="submit" class="btn-sm btn-test">❤️ Health Check</button>
-            </form>
+          <div class="stat-card">
+            <div class="stat-value" style="color: #ef4444;">{{ agents|rejectattr('enabled')|list|length }}</div>
+            <div class="stat-label">Offline</div>
           </div>
         </div>
-        {% endfor %}
-      </div>
+        
+        <!-- Info Box -->
+        <div class="info-box">
+          <strong>ℹ️ Agent Lifecycle:</strong> Agents stay in the system even when offline to maintain historical records, audit trail, and detect flapping. Use Admin Panel to permanently delete agents.
+        </div>
+        
+        <!-- Search & Filters -->
+        <div class="controls">
+          <input type="text" class="search-input" id="searchInput" placeholder="🔍 Search agents by name or URL..." />
+          <div class="filter-group">
+            <button class="filter-btn active" onclick="filterAgents('all')">All</button>
+            <button class="filter-btn" onclick="filterAgents('online')">🟢 Online</button>
+            <button class="filter-btn" onclick="filterAgents('offline')">🔴 Offline</button>
+          </div>
+        </div>
+        
+        <!-- Table View -->
+        <table class="table-view">
+          <thead>
+            <tr>
+              <th style="width: 25%;">Agent Name</th>
+              <th style="width: 30%;">Base URL</th>
+              <th style="width: 20%;">Capabilities</th>
+              <th style="width: 15%;">Last Updated</th>
+              <th style="width: 10%;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="agentTable">
+            {% for agent in agents %}
+            <tr class="agent-row" data-name="{{ agent.name|lower }}" data-url="{{ agent.base_url|lower }}" data-status="{{ 'online' if agent.enabled else 'offline' }}" data-agent-id="{{ agent.id }}">
+              <td>
+                <div class="agent-name-cell">
+                  <span class="agent-status {{ 'online' if agent.enabled else 'offline' }}" id="status-{{ agent.id }}" data-real-status="unknown" style="cursor: help;" title="Agent Status"></span>
+                  <span>{{ agent.name }}</span>
+                  <span class="health-indicator" id="health-{{ agent.id }}" style="display:none; margin-left: 8px; font-size: 0.75em; font-weight: 600;"></span>
+                </div>
+              </td>
+              <td>
+                <code style="font-size: 0.85em; background: rgba(0,0,0,0.1); padding: 2px 4px; border-radius: 3px;">{{ agent.base_url }}</code>
+              </td>
+              <td>
+                <div class="capabilities">
+                  {% if agent.capabilities %}
+                    {% for cap in agent.capabilities[:3] %}
+                      <span class="cap-tag">{{ cap }}</span>
+                    {% endfor %}
+                    {% if agent.capabilities|length > 3 %}
+                      <span class="cap-tag">+{{ agent.capabilities|length - 3 }}</span>
+                    {% endif %}
+                  {% else %}
+                    <span class="small" style="color: var(--muted);">-</span>
+                  {% endif %}
+                </div>
+              </td>
+              <td style="font-size: 0.85em;">
+                <div style="color: var(--muted);">{{ agent.updated_at[:10] if agent.updated_at else 'Unknown' }}</div>
+                <div style="color: var(--muted); font-size: 0.8em;">Last check: <span id="last-check-{{ agent.id }}">Never</span></div>
+              </td>
+              <td>
+                <a href="/playground?external_agent={{ agent.id }}" title="Test in Playground" style="color: #2563eb; text-decoration: none; cursor: pointer;">🎮</a>
+                <button
+                  type="button"
+                  class="health-btn"
+                  data-agent-id="{{ agent.id }}"
+                  data-base-url="{{ agent.base_url }}"
+                  title="Verify Agent Connection (Health Check)"
+                  style="background: none; border: none; cursor: pointer; padding: 2px 4px; color: #22c55e; font-size: 1.1em;"
+                >❤️</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        
+        <!-- Pagination (optional, for very large datasets) -->
+        <div class="pagination" id="pagination" style="display: none;">
+          <button onclick="previousPage()">← Previous</button>
+          <span id="pageInfo"></span>
+          <button onclick="nextPage()">Next →</button>
+        </div>
+        
       {% else %}
       <div class="empty-state">
-        <h3>No Agents Registered</h3>
+        <h3>🤖 No Agents Registered</h3>
         <p>Agents will appear here when they connect to Kakveda.</p>
-        <p class="small">To register an agent, set <code>AUTO_REGISTER=true</code> and <code>DASHBOARD_API_KEY</code> in your agent.</p>
+        <p class="small">To register an agent, set <code>AUTO_REGISTER=true</code> and <code>DASHBOARD_API_KEY</code> in your agent's environment.</p>
       </div>
       {% endif %}
     </div>
@@ -96,5 +238,254 @@
     </div>
     {% endif %}
   </div>
+  
+  <script>
+    let currentFilter = 'all';
+    
+    // Search functionality
+    document.getElementById('searchInput')?.addEventListener('keyup', (e) => {
+      const searchTerm = e.target.value.toLowerCase();
+      const rows = document.querySelectorAll('#agentTable tr');
+      
+      rows.forEach(row => {
+        const name = row.dataset.name;
+        const url = row.dataset.url;
+        const status = row.dataset.status;
+        
+        const matchesSearch = name.includes(searchTerm) || url.includes(searchTerm);
+        const matchesFilter = currentFilter === 'all' || status === currentFilter;
+        
+        row.style.display = matchesSearch && matchesFilter ? '' : 'none';
+      });
+    });
+    
+    // Filter functionality
+    function filterAgents(filter) {
+      currentFilter = filter;
+      
+      // Update button styles
+      document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+      event.target?.classList.add('active');
+      
+      // Filter rows
+      const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+      const rows = document.querySelectorAll('#agentTable tr');
+      
+      rows.forEach(row => {
+        const name = row.dataset.name;
+        const url = row.dataset.url;
+        const status = row.dataset.status;
+        
+        const matchesSearch = name.includes(searchTerm) || url.includes(searchTerm);
+        const matchesFilter = filter === 'all' || status === filter;
+        
+        row.style.display = matchesSearch && matchesFilter ? '' : 'none';
+      });
+    }
+    
+    // Real health check functionality
+    async function healthCheck(agentId, baseUrl) {
+      const statusEl = document.getElementById(`status-${agentId}`);
+      const healthEl = document.getElementById(`health-${agentId}`);
+      const lastCheckEl = document.getElementById(`last-check-${agentId}`);
+      const row = document.querySelector(`tr[data-agent-id="${agentId}"]`);
+      
+      // Show loading state
+      healthEl.style.display = 'block';
+      healthEl.innerHTML = '⏳ <strong>Checking...</strong>';
+      healthEl.style.color = '#f59e0b';
+      
+      const startTime = Date.now();
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString();
+      
+      console.log(`[Health Check] Starting for ${agentId}: ${baseUrl}`);
+      
+      try {
+        // Validate baseUrl format
+        if (!baseUrl || !baseUrl.startsWith('http')) {
+          throw new Error('Invalid base URL format');
+        }
+        
+        const healthUrl = `${baseUrl}/health`;
+        console.log(`[Health Check] Fetching: ${healthUrl}`);
+        
+        let response;
+        let responseTime;
+        
+        try {
+          // Try primary URL
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          
+          response = await fetch(healthUrl, { 
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal,
+            mode: 'cors',
+            credentials: 'omit'
+          });
+          clearTimeout(timeoutId);
+          responseTime = Date.now() - startTime;
+          console.log(`[Health Check] Response: ${response.status} (${responseTime}ms)`);
+        } catch (primaryError) {
+          // If primary fails with network error, try localhost fallback
+          const errorStr = primaryError.toString();
+          console.log(`[Health Check] Primary URL failed: ${errorStr}`);
+          
+          if (primaryError instanceof TypeError || primaryError.name === 'AbortError' || errorStr.includes('Failed to fetch')) {
+            const portMatch = baseUrl.match(/:(\d+)$/);
+            const port = portMatch ? portMatch[1] : '8120';
+            const localhostUrl = `http://localhost:${port}/health`;
+            
+            console.log(`[Health Check] Trying localhost fallback: ${localhostUrl}`);
+            
+            try {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 5000);
+              
+              response = await fetch(localhostUrl, { 
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal,
+                mode: 'cors',
+                credentials: 'omit'
+              });
+              clearTimeout(timeoutId);
+              responseTime = Date.now() - startTime;
+              console.log(`[Health Check] Localhost fallback response: ${response.status} (${responseTime}ms)`);
+            } catch (fallbackError) {
+              console.error(`[Health Check] Localhost fallback also failed:`, fallbackError);
+              throw fallbackError;
+            }
+          } else {
+            throw primaryError;
+          }
+        }
+        
+        if (response.ok) {
+          // Agent is actually online
+          console.log(`[Health Check] ${agentId} is ONLINE`);
+          statusEl.className = 'agent-status online';
+          statusEl.style.backgroundColor = '#22c55e';
+          statusEl.dataset.realStatus = 'online';
+          
+          healthEl.innerHTML = `✅ <strong>Online</strong> (${responseTime}ms)`;
+          healthEl.style.color = '#22c55e';
+          lastCheckEl.textContent = timeStr;
+          lastCheckEl.style.color = '#22c55e';
+          
+          if (row) {
+            row.dataset.status = 'online';
+            row.style.opacity = '1';
+          }
+        } else {
+          // Agent returned error
+          console.log(`[Health Check] ${agentId} returned HTTP ${response.status}`);
+          statusEl.className = 'agent-status offline';
+          statusEl.style.backgroundColor = '#ef4444';
+          statusEl.dataset.realStatus = 'error';
+          
+          healthEl.innerHTML = `⚠️ <strong>Error</strong> (HTTP ${response.status})`;
+          healthEl.style.color = '#ef4444';
+          lastCheckEl.textContent = timeStr;
+          lastCheckEl.style.color = '#ef4444';
+          
+          if (row) {
+            row.dataset.status = 'offline';
+            row.style.opacity = '0.6';
+          }
+        }
+      } catch (error) {
+        // Agent is unreachable - DNS error, network error, timeout, etc.
+        console.error(`[Health Check] ${agentId} FAILED:`, error.message, error.name);
+        
+        // FORCE status to offline regardless of current state
+        statusEl.className = 'agent-status offline';
+        statusEl.style.backgroundColor = '#ef4444';
+        statusEl.dataset.realStatus = 'offline';
+        
+        let errorMsg = 'Connection Failed';
+        if (error.name === 'AbortError') {
+          errorMsg = 'Timeout (>5s)';
+        } else if (error instanceof TypeError) {
+          errorMsg = 'Network Error';
+        } else if (error.message.includes('Invalid base URL')) {
+          errorMsg = 'Invalid URL';
+        } else if (error.message.includes('Failed to fetch') || error.message.includes('name resolution')) {
+          errorMsg = 'DNS Error';
+        }
+        
+        healthEl.innerHTML = `❌ <strong>Offline</strong> (${errorMsg})`;
+        healthEl.style.color = '#ef4444';
+        
+        lastCheckEl.textContent = timeStr;
+        lastCheckEl.style.color = '#ef4444';
+        
+        if (row) {
+          row.dataset.status = 'offline';
+          row.style.opacity = '0.6';
+        }
+      }
+    }
+    
+    // Update statistics based on current agent statuses
+    function updateStatistics() {
+      const rows = document.querySelectorAll('#agentTable tr');
+      const total = rows.length;
+      const online = Array.from(rows).filter(r => r.dataset.status === 'online').length;
+      const offline = total - online;
+      
+      // Find and update stat cards
+      const statCards = document.querySelectorAll('.stat-value');
+      if (statCards.length >= 3) {
+        statCards[0].textContent = total;           // Total
+        statCards[1].textContent = online;          // Online
+        statCards[2].textContent = offline;         // Offline
+      }
+      
+      console.log(`[Stats] Total: ${total}, Online: ${online}, Offline: ${offline}`);
+    }
+    
+    // Expose for debugging
+    window.healthCheck = healthCheck;
+
+    // Auto-check all agents on page load
+    window.addEventListener('load', () => {
+      const agents = document.querySelectorAll('[data-agent-id]');
+      console.log(`Found ${agents.length} agents, starting health checks...`);
+
+      // Bind click handlers to health buttons
+      document.querySelectorAll('.health-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          const agentId = btn.dataset.agentId;
+          const baseUrl = btn.dataset.baseUrl || '';
+          console.log(`[Health Check] Manual trigger for ${agentId}: ${baseUrl}`);
+          healthCheck(agentId, baseUrl);
+        });
+      });
+      
+      agents.forEach((row, index) => {
+        const agentId = row.dataset.agentId;
+        const baseUrl = row.querySelector('code')?.textContent || '';
+        
+        if (!baseUrl) {
+          console.warn(`No base URL found for agent ${agentId}`);
+          return;
+        }
+        
+        // Stagger requests to avoid overwhelming
+        setTimeout(() => {
+          console.log(`Health check ${index + 1}: ${agentId} (${baseUrl})`);
+          healthCheck(agentId, baseUrl);
+          
+          // Update stats after check completes
+          setTimeout(() => {
+            updateStatistics();
+          }, 100);
+        }, 500 + Math.random() * 1500);
+      });
+    });
+  </script>
 </body>
 </html>
