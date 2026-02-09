@@ -1,4 +1,4 @@
-# Kakveda – LLM Failure Intelligence Platform, Built in India 🇮🇳
+# Kakveda – LLM Failure Intelligence Platform
 
 Author: **Prateek Chaudhary**
 
@@ -608,4 +608,4 @@ Certain aspects of the underlying concepts may be the subject of patent filings.
 
 ---
 
-Copyright 2026 Prateek Chaudhary
+Copyright 2026 Prateek Chaudhary, Built in India 🇮🇳
