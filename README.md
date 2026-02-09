@@ -1,4 +1,4 @@
-# Kakveda – LLM Failure Intelligence Platform
+# Kakveda – LLM Failure Intelligence Platform, Built in India 🇮🇳
 
 Author: **Prateek Chaudhary**
 
