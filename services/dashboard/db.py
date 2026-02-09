@@ -650,6 +650,68 @@ def migrate_db() -> None:
             if "last_run_provider" not in c:
                 cur.execute("ALTER TABLE dataset_examples ADD COLUMN last_run_provider TEXT")
 
+        # scenarios + scenario_runs (ensure new columns exist for /scenarios UI)
+        tables = {r[0] for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "scenarios" not in tables:
+            cur.execute(
+                """
+                CREATE TABLE scenarios (
+                    id INTEGER PRIMARY KEY,
+                    code VARCHAR(16) UNIQUE,
+                    title VARCHAR(256),
+                    description TEXT,
+                    expected_behavior TEXT,
+                    category VARCHAR(64),
+                    difficulty VARCHAR(32),
+                    default_prompt TEXT
+                )
+                """
+            )
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS ix_scenarios_code ON scenarios(code)")
+            except Exception:
+                pass
+
+        if "scenario_runs" not in tables:
+            cur.execute(
+                """
+                CREATE TABLE scenario_runs (
+                    id INTEGER PRIMARY KEY,
+                    ts DATETIME,
+                    app_id VARCHAR(64),
+                    agent_id VARCHAR(64),
+                    prompt TEXT,
+                    scenario_id INTEGER,
+                    scenario_code VARCHAR(16),
+                    expected_behavior TEXT,
+                    note TEXT,
+                    FOREIGN KEY(scenario_id) REFERENCES scenarios(id)
+                )
+                """
+            )
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS ix_scenario_runs_ts ON scenario_runs(ts)")
+            except Exception:
+                pass
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS ix_scenario_runs_app_id ON scenario_runs(app_id)")
+            except Exception:
+                pass
+            try:
+                cur.execute("CREATE INDEX IF NOT EXISTS ix_scenario_runs_agent_id ON scenario_runs(agent_id)")
+            except Exception:
+                pass
+        else:
+            c = cols("scenario_runs")
+            if "scenario_id" not in c:
+                cur.execute("ALTER TABLE scenario_runs ADD COLUMN scenario_id INTEGER")
+            if "scenario_code" not in c:
+                cur.execute("ALTER TABLE scenario_runs ADD COLUMN scenario_code VARCHAR(16)")
+            if "expected_behavior" not in c:
+                cur.execute("ALTER TABLE scenario_runs ADD COLUMN expected_behavior TEXT")
+            if "note" not in c:
+                cur.execute("ALTER TABLE scenario_runs ADD COLUMN note TEXT")
+
         con.commit()
     except Exception:
         # Do not crash the app for migrations in a demo environment.
