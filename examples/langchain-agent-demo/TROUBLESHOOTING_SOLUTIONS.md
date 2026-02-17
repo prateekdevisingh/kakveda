@@ -194,14 +194,14 @@ Agent makes governance decisions but doesn't publish events → no dashboard met
 **Observation:** Agent runs, shows governance decisions, but nothing in dashboard.
 
 ### Fix
-Use `KakvedaAgent` (or `KakvedaGuard`) so events are published automatically after execution.
+Use `KakvedaAgent` so events are published automatically after execution.
 
 Checklist:
 - Ensure `KAKVEDA_EVENT_BUS_URL` is set correctly.
 - Verify the agent uses `KakvedaAgent.execute()` for tool calls.
 - Check logs for `[KAKVEDA] Event publishing failed` errors.
-  ### Verification
-  Check event-bus accepts events:
+### Verification
+Check event-bus accepts events:
 ```bash
 curl -s http://localhost:8100/publish \
   -H "Content-Type: application/json" \
@@ -284,45 +284,25 @@ KAKVEDA_AUTO_APPROVE=true
 
 ```python
 from dotenv import load_dotenv
-import os
-from datetime import datetime, timezone
-import requests
+
+from kakveda_sdk import KakvedaAgent
 
 # Load .env file
 load_dotenv()
 
-class KavkedaGovernanceManager:
-    def __init__(self):
-        self.warn_url = os.getenv("KAKVEDA_WARN_URL")
-        self.event_bus_url = os.getenv("KAKVEDA_EVENT_BUS_URL")
-        self.app_id = os.getenv("KAKVEDA_APP_ID", "phase1-demo")
+agent = KakvedaAgent(capabilities=["post_to_social"])
 ```
 
 ### 3. Warning Call Payload
 
 ```python
-payload = {
-    "prompt": prompt,
-    "tools": ["post_to_social"],
-    "app_id": self.app_id,
-    "env": {"platform": platform},
-}
-response = requests.post(self.warn_url, json=payload, timeout=10)
+# KakvedaAgent handles the /warn request internally via guard.preflight.
 ```
 
 ### 4. Event Publishing Payload
 
 ```python
-event = {
-    "topic": "trace.ingested",
-    "event": {
-        "app_id": self.app_id,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "tool": "post_to_social",
-        "action": "executed",
-    }
-}
-requests.post(self.event_bus_url, json=event, timeout=10)
+# KakvedaAgent publishes trace events automatically after execution.
 ```
 
 ---
@@ -345,9 +325,9 @@ requests.post(self.event_bus_url, json=event, timeout=10)
 
 ### Error: `ModuleNotFoundError: No module named 'kakveda_integration'`
 
-**Fix:** Copy `kakveda_integration.py` to your agent directory:
-```bash
-cp ../kakveda_integration.py .
+**Fix:** This repo no longer ships `kakveda_integration.py`. Use the SDK instead:
+```python
+from kakveda_sdk import KakvedaAgent
 ```
 
 ---
@@ -435,9 +415,9 @@ Look for:
 |-------|-----|------|---------|
 | Missing .env loading | Add `load_dotenv()` | agent_app.py | ~10 |
 | Wrong port | Change 8000 → 8105 | .env | ~1 |
-| Missing app_id | Add to payload | agent_app.py | ~40 |
-| No event publishing | Add `publish_event()` | agent_app.py | ~55 |
-| Wrong event format | Use `topic`/`event` | agent_app.py | ~65 |
+| Missing app_id | Ensure `AGENT_APP_ID` set | .env | ~1 |
+| No event publishing | Use `KakvedaAgent.execute()` | agent_app.py | ~60 |
+| Wrong event format | SDK handles it | kakveda_sdk/guard.py | - |
 
 ---
 

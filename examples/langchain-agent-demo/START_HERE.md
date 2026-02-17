@@ -33,7 +33,7 @@
 
 ## ✅ Current Recommended Path (Managed Agent)
 
-If your goal is **full Kakveda integration** (governance + event bus + dashboard agent visibility), use the managed agent flow in this folder:
+If your goal is **full Kakveda integration** (governance + event bus + dashboard agent visibility), use the managed agent flow in this folder. This is the supported path going forward:
 
 **What is already wired:**
 - `kakveda_sdk` exposes `KakvedaAgent` (guard + registration + heartbeat).
@@ -60,9 +60,15 @@ python agent_app.py --platform linkedin --topic "AI growth"
 
 ---
 
+## Legacy Manual Integration (Reference Only)
+
+The documents below describe the old, manual KakvedaGuard integration pattern. They are kept for historical context, but the legacy helper file `kakveda_integration.py` has been removed. If you are starting fresh, use the managed `KakvedaAgent` flow above.
+
+If you already have a legacy guard in your own codebase, you can still use the reference docs to understand the flow. Do not copy or import `kakveda_integration.py` from this repo.
+
 ## What You Got
 
-**3 comprehensive guide documents** that walk you through manually integrating KakvedaGuard into `agent_app_phase1.py`:
+**3 comprehensive guide documents** that walk you through manually integrating KakvedaGuard into `agent_app_phase1.py` (legacy reference):
 
 ### 1. ⚡ INTEGRATION_QUICK_REFERENCE.md (4.1 KB)
 **One-page cheat sheet**
@@ -155,7 +161,7 @@ langchain-agent-demo/
 
 ### Path 1: Impatient (5 min → Implement)
 1. Read [INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md) (4 steps + tests)
-2. Edit `agent_app_phase1.py` following the 4 steps
+2. Edit `agent_app_phase1.py` following the 4 steps (legacy reference only)
 3. Run the 3 tests
 4. ✅ Done
 
@@ -167,7 +173,7 @@ langchain-agent-demo/
 1. Read [DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md) (overview)
 2. Read [INTEGRATION_MANUAL.md](INTEGRATION_MANUAL.md) (Steps 1-5)
 3. Reference [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) (for code comparison)
-4. Edit `agent_app_phase1.py` using QUICK_REFERENCE
+4. Edit `agent_app_phase1.py` using QUICK_REFERENCE (legacy reference only)
 5. Run tests
 6. ✅ Done
 
@@ -178,7 +184,7 @@ langchain-agent-demo/
 ### Path 3: Visual (10 min → Implement)
 1. Read [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) (side-by-side diffs)
 2. Use [INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md) (copy-paste code)
-3. Edit file
+3. Edit file (legacy reference only)
 4. Run tests
 5. ✅ Done
 
@@ -186,20 +192,9 @@ langchain-agent-demo/
 
 ---
 
-## What Gets Added to Your File
+## What Gets Added to Your File (Legacy Reference)
 
-```
-agent_app_phase1.py
-├─ Line 12:   + from kakveda_integration import KakvedaGuard
-├─ Line 33:   + self.guard = KakvedaGuard() if governance_enabled else None
-├─ Lines 48-52:  + def post_action(): wrapper function
-├─ Lines 56:     CHANGE mock_social_api.post() to post_action()
-└─ Lines 60-85:  REPLACE governance section with guard logic
-```
-
-**Total additions:** ~35 lines  
-**Changes to existing code:** Minimal  
-**Backward compatibility:** ✅ Full (--no-governance works unchanged)
+The legacy guides show how to wrap execution with a guard. That flow still applies conceptually, but the `kakveda_integration.py` helper referenced in those docs is no longer part of this repo. Prefer the SDK-managed path above.
 
 ---
 
@@ -259,54 +254,9 @@ Expected: `[FINAL RESULT] executed`
 
 ---
 
-## Quick Reference: The 4 Code Changes
+## Quick Reference: The 4 Code Changes (Legacy Reference)
 
-### Change 1: Add Import (1 line)
-```python
-from kakveda_integration import KakvedaGuard
-```
-
-### Change 2: Initialize Guard (1 line)
-```python
-self.guard = KakvedaGuard() if governance_enabled else None
-```
-
-### Change 3: Create Helper (5 lines)
-```python
-def post_action():
-    """Execute the actual social media post."""
-    mock_social_api.post(content, self.platform)
-    return "posted"
-```
-
-### Change 4: Guard Logic (~26 lines)
-```python
-if self.governance_enabled and self.guard:
-    print("[TOOL EXECUTION] with-governance")
-    print("-> Sending to Kakveda...")
-    
-    result = self.guard.guarded_execute(
-        prompt=content,
-        tool_name="post_to_social",
-        execute_fn=post_action,
-        metadata={"platform": self.platform}
-    )
-    
-    if result is None:
-        print("[EXECUTION DECISION] blocked by Kakveda")
-        print("[FINAL RESULT] blocked")
-        return "blocked"
-    else:
-        print("[EXECUTION DECISION] allowed")
-        print("[FINAL RESULT] executed")
-        return "executed"
-
-# Fallback
-print("[TOOL EXECUTION] no-governance")
-post_action()
-print("[FINAL RESULT] executed")
-return "executed"
-```
+These steps are retained for historical context only. If you need a working integration in this repo, use `KakvedaAgent` in [examples/langchain-agent-demo/agent_app.py](examples/langchain-agent-demo/agent_app.py).
 
 ---
 

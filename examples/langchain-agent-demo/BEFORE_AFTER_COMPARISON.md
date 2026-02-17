@@ -1,10 +1,22 @@
-# Before & After: Code Comparison
+# Before & After: Code Comparison (Legacy Reference)
 
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
 **File:** `agent_app_phase1.py`  
-**Purpose:** Visual guide showing exact changes for KakvedaGuard integration
+**Purpose:** Visual guide showing exact changes for KakvedaGuard integration (legacy reference only)
+
+---
+
+## ✅ Recommended SDK-Managed Path
+
+For supported integration, use `agent_app.py` with `KakvedaAgent` and skip manual guard wiring:
+
+```python
+from kakveda_sdk import KakvedaAgent
+```
+
+This legacy comparison remains for historical context.
 
 ---
 
@@ -38,7 +50,7 @@ from typing import Optional
 import requests
 
 import mock_social_api
-from kakveda_integration import KakvedaGuard  # ← NEW LINE
+from kakveda_sdk.guard import KakvedaGuard  # ← NEW LINE
 ```
 
 ### What Changed
@@ -220,7 +232,7 @@ if not self.governance_enabled:
 ```
 File: agent_app_phase1.py
 
-Line 13:  + from kakveda_integration import KakvedaGuard
+Line 13:  + from kakveda_sdk.guard import KakvedaGuard
 Line 33:  + self.guard = KakvedaGuard() if governance_enabled else None
 Line 48:  + def post_action():
 Line 49:  + 

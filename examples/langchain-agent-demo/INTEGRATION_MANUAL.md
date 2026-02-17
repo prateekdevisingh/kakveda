@@ -1,11 +1,23 @@
-# Manual Integration Guide: Adding KakvedaGuard to agent_app_phase1.py
+# Manual Integration Guide (Legacy Reference): Adding KakvedaGuard to agent_app_phase1.py
 
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
 **Date:** 2026-02-17  
 **File:** `agent_app_phase1.py`  
-**Goal:** Manually integrate Kakveda governance without code generation
+**Goal:** Manually integrate Kakveda governance without code generation (legacy reference only)
+
+---
+
+## ✅ Recommended SDK-Managed Path
+
+If you want a supported integration, use the managed SDK flow in `agent_app.py`:
+
+- `from kakveda_sdk import KakvedaAgent`
+- Use `KakvedaAgent.execute()` to wrap tool calls
+- Registration + heartbeats are handled automatically
+
+This legacy guide is retained for historical context only.
 
 ---
 
@@ -36,9 +48,12 @@ KAKVEDA_FAIL_CLOSED=false
 
 **⚠️ IMPORTANT:** Port is **8105** NOT 8000!
 
-### 3. Copy Integration Module
-```bash
-cp ../kakveda_integration.py .
+### 3. Legacy Guard Availability
+
+This repo no longer ships `kakveda_integration.py`. If you still need a manual guard, import it from the SDK:
+
+```python
+from kakveda_sdk.guard import KakvedaGuard
 ```
 
 ### 4. Test Connectivity
@@ -83,7 +98,7 @@ Your `agent_app_phase1.py` has:
 
 ---
 
-## Step 1: Import KakvedaGuard
+## Step 1: Import KakvedaGuard (Legacy Reference)
 
 **Location:** Top of file (after existing imports)
 
@@ -106,13 +121,13 @@ import mock_social_api
 Add ONE line after `import mock_social_api`:
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 ```
 
 **Result:**
 ```python
 import mock_social_api
-from kakveda_integration import KakvedaGuard  # ← NEW
+from kakveda_sdk.guard import KakvedaGuard  # ← NEW
 ```
 
 **Why:** Brings the `KakvedaGuard` class into scope so you can use it.

@@ -1,11 +1,23 @@
-# Integration Quick Reference Card
+# Integration Quick Reference Card (Legacy Reference)
 
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
 **File:** `agent_app_phase1.py`  
-**Task:** Add KakvedaGuard in 4 steps  
+**Task:** Add KakvedaGuard in 4 steps (legacy reference only)  
 **Time:** ~5 minutes  
+
+---
+
+## ✅ Recommended SDK-Managed Path
+
+For supported integration, use `agent_app.py` with `KakvedaAgent`:
+
+```python
+from kakveda_sdk import KakvedaAgent
+```
+
+Then call `KakvedaAgent.execute()` around tool execution. Registration + heartbeat are automatic.
 
 ---
 
@@ -22,7 +34,7 @@ Before integrating code:
    KAKVEDA_ENVIRONMENT=dev
    KAKVEDA_FAIL_CLOSED=false
    ```
-3. **Copy module:** `cp ../kakveda_integration.py .`
+3. **Legacy guard:** This repo no longer ships `kakveda_integration.py`. If you need a manual guard, import it from the SDK.
 4. **Test connection:**
    ```bash
    curl -s http://localhost:8105/warn -H "Content-Type: application/json" \
@@ -37,7 +49,7 @@ If test fails → Read [TROUBLESHOOTING_SOLUTIONS.md](TROUBLESHOOTING_SOLUTIONS.
 
 ### Step 1️⃣ Import (1 line)
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 ```
 **Where:** After `import mock_social_api` (line 12)
 

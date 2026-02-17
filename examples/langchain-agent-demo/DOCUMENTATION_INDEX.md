@@ -3,7 +3,7 @@
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
-**What you have:** Complete guidance for manually integrating KakvedaGuard into `agent_app_phase1.py`
+**What you have:** Complete guidance for manually integrating KakvedaGuard into `agent_app_phase1.py` (legacy reference)
 
 **Created:** 2026-02-17  
 **Status:** ✅ Ready to use
@@ -12,7 +12,13 @@
 
 ## 📚 Documentation Files (Choose Your Path)
 
-### For the Impatient (5 min)
+### ✅ Recommended SDK-Managed Path
+
+Use `agent_app.py` with `KakvedaAgent` for the supported integration flow.
+
+**Best if:** You want governance + events + dashboard visibility with minimal wiring.
+
+### For the Impatient (5 min, legacy reference)
 → **[INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md)**
 - ✅ 4 steps to integration
 - ✅ Code snippets copy-paste ready
@@ -23,7 +29,7 @@
 
 ---
 
-### For Complete Understanding (15-20 min)
+### For Complete Understanding (15-20 min, legacy reference)
 → **[INTEGRATION_MANUAL.md](INTEGRATION_MANUAL.md)**
 - ✅ Step-by-step breakdown (Steps 1-6)
 - ✅ Why each change matters
@@ -37,7 +43,7 @@
 
 ---
 
-### For Visual Learners (10 min)
+### For Visual Learners (10 min, legacy reference)
 → **[BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md)**
 - ✅ Side-by-side code comparison
 - ✅ Line-by-line marked changes (← NEW)
@@ -51,7 +57,7 @@
 
 ## How to Use This Documentation
 
-### Scenario 1: "Just tell me what to do"
+### Scenario 1: "Just tell me what to do" (legacy reference)
 1. Open [INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md)
 2. Follow the 4 steps
 3. Run the 3 tests
@@ -61,7 +67,7 @@
 
 ---
 
-### Scenario 2: "I want to understand it"
+### Scenario 2: "I want to understand it" (legacy reference)
 1. Read [INTEGRATION_MANUAL.md](INTEGRATION_MANUAL.md) sections: Overview, Step 1-5, Understanding the Flow
 2. Read [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) to see exact changes
 3. Follow [INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md) to implement
@@ -71,7 +77,7 @@
 
 ---
 
-### Scenario 3: "I'm debugging"
+### Scenario 3: "I'm debugging" (legacy reference)
 1. Check [INTEGRATION_MANUAL.md](INTEGRATION_MANUAL.md) → Debugging Checklist
 2. See [BEFORE_AFTER_COMPARISON.md](BEFORE_AFTER_COMPARISON.md) → Test Cases for expected output
 3. Verify against [INTEGRATION_QUICK_REFERENCE.md](INTEGRATION_QUICK_REFERENCE.md) → Lines Changed
@@ -161,7 +167,7 @@ Code Comparison
 
 ---
 
-## The 4 Steps at a Glance
+## The 4 Steps at a Glance (Legacy Guard)
 
 | Step | What | Where | Lines | Why |
 |------|------|-------|-------|-----|
