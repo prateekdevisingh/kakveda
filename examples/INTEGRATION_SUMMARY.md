@@ -1,6 +1,6 @@
 # Kakveda Integration — Complete Implementation
 
-**Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
+**Note:** This document describes the legacy KakvedaGuard integration (reference only). The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
 **Date:** 2026-02-17  

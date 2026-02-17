@@ -1,6 +1,6 @@
 # Integration Layer + Phased Demo Guide
 
-**Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
+**Note:** This document describes the legacy KakvedaGuard integration (reference only). The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
 This directory contains two complementary approaches to understanding and integrating Kakveda governance:
