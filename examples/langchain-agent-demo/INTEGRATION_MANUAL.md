@@ -502,7 +502,7 @@ KAKVEDA_FAIL_CLOSED=false python agent_app_phase1.py --platform linkedin --topic
 
 ```bash
 # Default endpoints
-export KAKVEDA_WARN_URL=http://localhost:8000/warn
+export KAKVEDA_WARN_URL=http://localhost:8105/warn
 export KAKVEDA_EVENT_BUS_URL=http://localhost:8100/publish
 
 # App context
@@ -525,7 +525,7 @@ python agent_app_phase1.py --platform linkedin --topic "AI growth"
 
 | Component | Lines | Change | Impact |
 |-----------|-------|--------|--------|
-| **Import** | 1 | Add `from kakveda_integration import KakvedaGuard` | Brings guard into scope |
+| **Import** | 1 | Add `from kakveda_sdk.guard import KakvedaGuard` | Brings guard into scope |
 | **__init__** | 2 | Add `self.guard = KakvedaGuard() if governance_enabled else None` | Initializes guard conditionally |
 | **run()** | +20 | Add helper function + governance logic | Wraps execution with policy check |
 | **Total edits** | ~35 lines modified | 3 distinct changes | Full governance support |
@@ -568,7 +568,7 @@ Kakveda Guard (preflight)
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| `NameError: KakvedaGuard not defined` | Import missing | Add `from kakveda_integration import KakvedaGuard` |
+| `NameError: KakvedaGuard not defined` | Import missing | Add `from kakveda_sdk.guard import KakvedaGuard` |
 | `self.guard is None` | Governance disabled | Run without `--no-governance` flag |
 | Always returns "blocked" | `KAKVEDA_FAIL_CLOSED=true` | Set `KAKVEDA_FAIL_CLOSED=false` to allow |
 | Guard not called | Governance not enabled | Remove `--no-governance` flag or fix condition |
@@ -632,7 +632,7 @@ Non-blocking, always succeeds or fails silently.
 
 After edits:
 
-- [ ] `from kakveda_integration import KakvedaGuard` at top
+- [ ] `from kakveda_sdk.guard import KakvedaGuard` at top
 - [ ] `self.guard = KakvedaGuard() if governance_enabled else None` in `__init__`
 - [ ] `def post_action():` helper function in `run()`
 - [ ] `if not self.governance_enabled:` block unchanged

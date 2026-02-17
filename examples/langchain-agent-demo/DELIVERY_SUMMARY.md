@@ -1,4 +1,4 @@
-# 🎉 COMPLETED: Manual Integration Documentation Suite
+# 🎉 COMPLETED: Manual Integration Documentation Suite (Legacy Reference)
 
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
@@ -15,7 +15,7 @@
 
 ## What You Got
 
-**A complete, professional documentation suite** with 5 new guides (56 KB) that walk you through manually integrating KakvedaGuard into `agent_app_phase1.py`:
+**A complete, professional documentation suite** with 5 new guides (56 KB) that walk you through manually integrating KakvedaGuard into `agent_app_phase1.py` (legacy reference). For new integrations, prefer `KakvedaAgent` in `agent_app.py`.
 
 ---
 
@@ -213,7 +213,7 @@ Edit agent_app_phase1.py
 ```
 STEP 1: Add Import (1 line, 30 seconds)
 ├─ Location: Top of agent_app_phase1.py
-├─ Code: from kakveda_integration import KakvedaGuard
+├─ Code: from kakveda_sdk.guard import KakvedaGuard
 └─ Impact: Brings guard into scope
 
 STEP 2: Initialize Guard (1 line, 30 seconds)

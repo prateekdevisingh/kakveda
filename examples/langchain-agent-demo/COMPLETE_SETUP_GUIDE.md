@@ -87,15 +87,11 @@ cat .env
 
 ---
 
-## Step 2: Copy Integration Module
+## Step 2: Use the SDK (Recommended)
 
-```bash
-# From langchain-agent-demo directory
-cp ../kakveda_integration.py .
+This repo includes the SDK in `kakveda_sdk`. You do not need to copy any helper files.
 
-# Verify it exists
-ls -lh kakveda_integration.py
-```
+If you are running the demo in this repo, `agent_app.py` already imports `KakvedaAgent`.
 
 ---
 
@@ -341,7 +337,7 @@ Open **http://localhost:8110** in browser:
 
 - [ ] Kakveda services running (`docker ps`)
 - [ ] `.env` file created with correct URLs
-- [ ] `kakveda_integration.py` copied to agent directory
+- [ ] Using `kakveda_sdk` in the agent code
 - [ ] Warning endpoint test successful (curl)
 - [ ] Event bus endpoint test successful (curl)
 - [ ] `load_dotenv()` added to agent code

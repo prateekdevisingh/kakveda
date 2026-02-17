@@ -67,9 +67,9 @@ payload = {
 ModuleNotFoundError: No module named 'kakveda_integration'
 ```
 
-**Fix:** Copy module
-```bash
-cp ../kakveda_integration.py .
+**Fix:** Use the SDK instead
+```python
+from kakveda_sdk import KakvedaAgent
 ```
 
 ---

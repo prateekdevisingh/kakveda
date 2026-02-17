@@ -17,7 +17,7 @@ A **framework-agnostic integration layer** has been created that allows any AI a
 - Creating tight coupling
 - Complex setup
 
-**Key deliverable:** One portable Python file (`kakveda_integration.py`) + comprehensive docs.
+**Key deliverable:** The `kakveda_sdk` package (SDK + guard) + comprehensive docs.
 
 ---
 
@@ -25,13 +25,13 @@ A **framework-agnostic integration layer** has been created that allows any AI a
 
 ### 1️⃣ Production Integration Layer
 
-**File:** `kakveda_integration.py` (11KB, pure Python)
+**Package:** `kakveda_sdk`
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk import KakvedaAgent
 
-guard = KakvedaGuard()
-result = guard.guarded_execute(
+agent = KakvedaAgent(capabilities=["my_tool"])
+result = agent.execute(
     prompt="user input",
     tool_name="my_tool",
     execute_fn=my_function
@@ -69,7 +69,7 @@ Path to understanding without implementation:
 
 ## Core API
 
-### KakvedaGuard Class
+### KakvedaGuard Class (Legacy API)
 
 ```python
 class KakvedaGuard:
@@ -106,7 +106,7 @@ class KakvedaGuard:
 
 ```python
 from langchain.agents import Tool
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 guard = KakvedaGuard()
 
@@ -126,7 +126,7 @@ tool = Tool(name="your_tool", func=wrapped_tool)
 
 ```python
 from fastapi import FastAPI
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 app = FastAPI()
 guard = KakvedaGuard()
@@ -145,7 +145,7 @@ def handle_execution(request: dict):
 ### Pattern 3: Custom Agent Class
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 class MyAgent:
     def __init__(self):
@@ -166,7 +166,7 @@ class MyAgent:
 ### Pattern 4: Microservice Handler
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 class Service:
     def __init__(self):
@@ -190,7 +190,7 @@ class Service:
 
 ```bash
 # Kakveda endpoints
-KAKVEDA_WARN_URL=http://warning-policy:8000/warn
+KAKVEDA_WARN_URL=http://warning-policy:8105/warn
 KAKVEDA_EVENT_BUS_URL=http://event-bus:8100/publish
 
 # Application context
@@ -275,20 +275,16 @@ KAKVEDA_AUTO_APPROVE=false     # Manual approval for "require-approval"
 
 ## Getting Started (3 Steps)
 
-### Step 1: Copy File
-```bash
-cp kakveda-v1.0/examples/kakveda_integration.py /your-project/
+### Step 1: Import & Initialize
+```python
+from kakveda_sdk import KakvedaAgent
+
+agent = KakvedaAgent(capabilities=["my_tool"])
 ```
 
-### Step 2: Import & Initialize
+### Step 2: Wrap Execution
 ```python
-from kakveda_integration import KakvedaGuard
-guard = KakvedaGuard()
-```
-
-### Step 3: Wrap Execution
-```python
-result = guard.guarded_execute(
+result = agent.execute(
     prompt="user input",
     tool_name="my_tool",
     execute_fn=my_function,
@@ -304,7 +300,7 @@ Done.
 
 ### Integration Layer
 ```
-kakveda_integration.py          (11 KB) Main library class
+kakveda_sdk/                    SDK package
 integration_examples.py         (6.6 KB) 5 working patterns
 INTEGRATION.md                  (13 KB) Full guide
 INTEGRATION_SUMMARY.md          (9.2 KB) Implementation checklist
@@ -333,7 +329,7 @@ langchain-agent-demo/
 ### Test Integration Layer
 ```bash
 cd kakveda-v1.0/examples
-python kakveda_integration.py
+python integration_examples.py
 ```
 
 Shows governance in action, demonstrates fail-closed behavior.
@@ -357,11 +353,11 @@ Validates standalone agent works.
 
 ## Production Checklist
 
-- [ ] Copy `kakveda_integration.py` to project
+- [ ] Add `kakveda_sdk` to project
 - [ ] Add `requests` to requirements.txt
 - [ ] Set KAKVEDA_* environment variables
 - [ ] Identify first tool/action to wrap
-- [ ] Wrap with `guard.guarded_execute()`
+- [ ] Wrap with `agent.execute()`
 - [ ] Test locally with Kakveda available
 - [ ] Review logs in Kakveda dashboard
 - [ ] Deploy to staging
@@ -481,4 +477,4 @@ Governance. As. Middleware.
 - Enterprise AI systems
 - Any Python+requests environment
 
-**Next action:** Copy `kakveda_integration.py` and follow INTEGRATION.md.
+**Next action:** Use `kakveda_sdk` and follow INTEGRATION.md.

@@ -6,7 +6,7 @@
 This directory contains two complementary approaches to understanding and integrating Kakveda governance:
 
 1. **Phased Demo** (`langchain-agent-demo/`) — Educational, step-by-step
-2. **Integration Layer** (`kakveda_integration.py`) — Production-ready wrapper
+2. **SDK Integration** (`kakveda_sdk`) — Production-ready wrapper
 
 ---
 
@@ -23,14 +23,14 @@ cd langchain-agent-demo/
 python agent_app_phase1.py --platform linkedin --topic "AI growth" --no-governance
 ```
 
-### For Production Integration
-Use the integration layer:
+### SDK Quick Integration
+Use the SDK-managed wrapper in your agent:
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk import KakvedaAgent
 
-guard = KakvedaGuard()
-result = guard.guarded_execute(
+agent = KakvedaAgent(capabilities=["my_tool"])
+result = agent.execute(
     prompt=user_input,
     tool_name="my_tool",
     execute_fn=my_function
@@ -44,7 +44,7 @@ result = guard.guarded_execute(
 | File/Folder | Purpose |
 |---|---|
 | `langchain-agent-demo/` | 3-phase governance demo (educational) |
-| `kakveda_integration.py` | Framework-agnostic wrapper (production) |
+| `kakveda_sdk/` | Unified SDK wrapper (production) |
 | `INTEGRATION.md` | Integration guide & API reference |
 
 ---
@@ -57,8 +57,9 @@ result = guard.guarded_execute(
 - Testing locally without Kakveda running
 - Understanding the /warn and /publish flow
 
-### Use the Integration Layer if you're:
+### Use the SDK Integration if you're:
 - Integrating with LangChain
+- Integrating with LangGraph
 - Integrating with FastAPI/Flask
 - Integrating with a custom agent
 - Building for production
@@ -68,14 +69,14 @@ result = guard.guarded_execute(
 
 ## Comparison
 
-| Aspect | Phased Demo | Integration Layer |
-|--------|------------|-------------------|
+| Aspect | Phased Demo | SDK Integration |
+|--------|------------|-----------------|
 | Purpose | Learning | Production |
 | Code | Explicit flow | Wrapped abstraction |
 | Framework | None (pure Python) | None (pure Python) |
 | Setup | python-only | python + requests |
 | Customization | Modify source | Configure env vars |
-| Reusability | Demo only | Copy into any project |
+| Reusability | Demo only | Reusable SDK package |
 
 ---
 
@@ -95,17 +96,18 @@ Read [INTEGRATION.md](INTEGRATION.md) to understand production patterns.
 
 ### Step 3: Use in Your Project
 
-Copy `kakveda_integration.py` to your project and import:
+Use the SDK directly and wrap your execution:
 
 ```python
-from kakveda_integration import KakvedaGuard
-guard = KakvedaGuard()
+from kakveda_sdk import KakvedaAgent
+
+agent = KakvedaAgent(capabilities=["my_tool"])
 ```
 
 ### Step 4: Configure Environment
 
 ```bash
-export KAKVEDA_WARN_URL=http://your-kakveda:8000/warn
+export KAKVEDA_WARN_URL=http://your-kakveda:8105/warn
 export KAKVEDA_EVENT_BUS_URL=http://your-kakveda:8100/publish
 export KAKVEDA_APP_ID=my-agent
 export KAKVEDA_ENVIRONMENT=production
@@ -121,8 +123,8 @@ export KAKVEDA_ENVIRONMENT=production
 │  ├─ agent_app_phase2.py  → + Governance
 │  └─ Shows explicit flow
 │
-├─ Integration Layer (Production)
-│  ├─ kakveda_integration.py → KakvedaGuard class
+├─ SDK Integration (Production)
+│  ├─ kakveda_sdk → KakvedaAgent + KakvedaGuard
 │  └─ Abstract away complexity
 │
 └─ Integration Guide
@@ -154,8 +156,8 @@ User Action → Preflight Check → Kakveda Decision → Execute or Block → Re
 
 1. **Read** [INTEGRATION.md](INTEGRATION.md) for full API reference
 2. **Run** Phase 1 demo to see the flow
-3. **Copy** `kakveda_integration.py` into your project
-4. **Wrap** your first execution call
+3. **Use** `kakveda_sdk` in your project
+4. **Wrap** your first execution call via `KakvedaAgent.execute()`
 5. **Test** against Kakveda locally or staging
 
 ---

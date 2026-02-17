@@ -10,11 +10,11 @@
 
 ## What's Been Delivered
 
-### 1. Framework-Agnostic Integration Layer
+### 1. SDK Integration Layer
 
-**File:** `kakveda_integration.py`
+**Package:** `kakveda_sdk`
 
-A production-ready Python class (`KakvedaGuard`) that:
+A production-ready SDK (`KakvedaAgent` + `KakvedaGuard`) that:
 - Wraps any agent execution with governance
 - Calls Kakveda /warn for preflight checks
 - Publishes events to /publish for observability
@@ -88,8 +88,8 @@ Navigation guide connecting:
 │  ├─ Execution call: my_function()
 │  └─ Wrapper: guard.guarded_execute(...)
 │
-├─ KakvedaGuard (integration layer)
-│  ├─ preflight() → POST /warn
+├─ KakvedaAgent (integration layer)
+│  ├─ guard.preflight() → POST /warn
 │  ├─ orchestrate execution
 │  └─ publish() → POST /publish
 │
@@ -102,20 +102,16 @@ Navigation guide connecting:
 
 ## Usage (Copy-Paste Ready)
 
-### Step 1: Copy file
-```bash
-cp kakveda_integration.py /your-project/
+### Step 1: Import
+```python
+from kakveda_sdk import KakvedaAgent
+
+agent = KakvedaAgent(capabilities=["my_tool"])
 ```
 
-### Step 2: Import
+### Step 2: Wrap execution
 ```python
-from kakveda_integration import KakvedaGuard
-guard = KakvedaGuard()
-```
-
-### Step 3: Wrap execution
-```python
-result = guard.guarded_execute(
+result = agent.execute(
     prompt="user input",
     tool_name="my_tool",
     execute_fn=my_function,
@@ -161,6 +157,8 @@ export KAKVEDA_ENVIRONMENT=production
 
 ### Constructor
 ```python
+from kakveda_sdk.guard import KakvedaGuard
+
 guard = KakvedaGuard(
     warn_url=None,              # Uses env or default
     event_bus_url=None,         # Uses env or default
@@ -207,7 +205,7 @@ result = guard.guarded_execute(
 
 ```
 kakveda-v1.0/examples/
-├── kakveda_integration.py         [NEW] Integration layer
+├── kakveda_sdk/                   [NEW] SDK integration layer
 ├── integration_examples.py        [NEW] Practical examples
 ├── INTEGRATION.md                 [NEW] Full guide
 ├── README.md                      [UPDATED] Navigation
@@ -231,7 +229,7 @@ kakveda-v1.0/examples/
 ### Validate Integration Layer Works
 ```bash
 cd kakveda-v1.0/examples
-python kakveda_integration.py
+python integration_examples.py
 ```
 
 Expected output:
@@ -259,23 +257,23 @@ python agent_app_phase1.py --platform linkedin --topic "AI growth" --no-governan
 ## Integration Paths
 
 ### Path 1: LangChain Team
-1. Copy `kakveda_integration.py`
+1. Use `KakvedaAgent` from `kakveda_sdk`
 2. Follow "Pattern 1" in INTEGRATION.md
-3. Wrap each Tool's func
+3. Wrap each Tool's func with `agent.execute()`
 
 ### Path 2: FastAPI/Flask Team
-1. Copy `kakveda_integration.py`
+1. Use `KakvedaAgent` from `kakveda_sdk`
 2. Follow "Pattern 2" in INTEGRATION.md
-3. Wrap route handlers
+3. Wrap route handlers with `agent.execute()`
 
 ### Path 3: Custom Agent
-1. Copy `kakveda_integration.py`
+1. Use `KakvedaAgent` from `kakveda_sdk`
 2. Follow "Pattern 4" in INTEGRATION.md
-3. Wrap execution methods
+3. Wrap execution methods with `agent.execute()`
 
 ### Path 4: Microservice
-1. Copy `kakveda_integration.py`
-2. Wrap service method calls
+1. Use `KakvedaAgent` from `kakveda_sdk`
+2. Wrap service method calls with `agent.execute()`
 3. Set environment variables per service instance
 
 ---
@@ -307,11 +305,11 @@ KAKVEDA_ENVIRONMENT=shadow
 
 ## Deployment Checklist
 
-- [ ] Copy `kakveda_integration.py` to project
+- [ ] Add `kakveda_sdk` to your project
 - [ ] Install requests: `pip install requests`
 - [ ] Set KAKVEDA_* environment variables
 - [ ] Identify one execution point to wrap
-- [ ] Wrap with `guard.guarded_execute()`
+- [ ] Wrap with `agent.execute()`
 - [ ] Test locally with Kakveda running
 - [ ] Verify logs in Kakveda dashboard
 - [ ] Deploy to staging
@@ -355,7 +353,7 @@ KAKVEDA_ENVIRONMENT=shadow
 
 ## Next Steps
 
-1. **Copy** `kakveda_integration.py` to your project
+1. **Add** `kakveda_sdk` to your project
 2. **Read** [INTEGRATION.md](INTEGRATION.md) section for your framework
 3. **Try** [integration_examples.py](integration_examples.py) to see patterns
 4. **Wrap** your first execution call

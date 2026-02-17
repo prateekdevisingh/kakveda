@@ -340,7 +340,7 @@ Generated Content:
 
 ### Full New Import Line
 ```
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 ```
 
 ### Full New Init Line

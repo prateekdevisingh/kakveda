@@ -4,7 +4,7 @@
 
 
 **Created:** 2026-02-17  
-**Purpose:** Manual integration documentation suite for KakvedaGuard  
+**Purpose:** Manual integration documentation suite for KakvedaGuard (legacy reference)  
 **Location:** `/home/prateek/Documents/kakveda/kakveda-v1.0/examples/langchain-agent-demo/`  
 **Total Size:** 98 KB (4 new docs + 4 existing + 1 updated)  
 
@@ -377,7 +377,7 @@ Generated Content:
 ```
 Keep for reference:
 /home/prateek/Documents/kakveda/kakveda-v1.0/examples/
-├── kakveda_integration.py          ← Core integration class
+├── kakveda_sdk/                    ← Core SDK integration layer
 ├── integration_examples.py         ← 5 usage examples
 ├── INTEGRATION.md                  ← Full API docs
 ├── INTEGRATION_SUMMARY.md          ← Deployment guide

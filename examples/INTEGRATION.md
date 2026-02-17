@@ -3,7 +3,7 @@
 **Note:** This document describes the legacy KakvedaGuard integration. The current SDK is `kakveda_sdk`; use `from kakveda_sdk import KakvedaAgent` and do not copy `kakveda_integration.py`.
 
 
-**Location:** `kakveda-v1.0/examples/kakveda_integration.py`
+**Location:** `kakveda-v1.0/kakveda_sdk/guard.py`
 
 A lightweight, framework-agnostic middleware for integrating any AI agent system with Kakveda without modifying the agent's core logic or adopting Kakveda-specific patterns.
 
@@ -22,20 +22,14 @@ Your agent never knows Kakveda exists.
 
 ---
 
-## Quick Start
+## Quick Start (SDK-Managed)
 
-### 1. Copy the file into your agent project
-
-```bash
-cp kakveda-v1.0/examples/kakveda_integration.py /your-agent-project/
-```
-
-### 2. Import and initialize
+### 1. Import and initialize
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk import KakvedaAgent
 
-guard = KakvedaGuard()
+agent = KakvedaAgent(capabilities=["my_tool"])
 ```
 
 ### 3. Wrap your execution
@@ -45,7 +39,7 @@ def my_agent_action():
     # Your actual agent code here
     return result
 
-result = guard.guarded_execute(
+result = agent.execute(
     prompt=user_input,
     tool_name="my_tool",
     execute_fn=my_agent_action,
@@ -73,7 +67,7 @@ Configure via environment or `.env`:
 ### Example .env
 
 ```bash
-KAKVEDA_WARN_URL=http://localhost:8000/warn
+KAKVEDA_WARN_URL=http://localhost:8105/warn
 KAKVEDA_EVENT_BUS_URL=http://localhost:8100/publish
 KAKVEDA_APP_ID=my-agent-prod
 KAKVEDA_ENVIRONMENT=production
@@ -82,11 +76,13 @@ KAKVEDA_FAIL_CLOSED=true
 
 ---
 
-## API Reference
+## API Reference (Legacy Guard)
 
 ### 1. KakvedaGuard Constructor
 
 ```python
+from kakveda_sdk.guard import KakvedaGuard
+
 guard = KakvedaGuard(
     warn_url=None,              # Auto-detect from env or use default
     event_bus_url=None,         # Auto-detect from env or use default
@@ -174,7 +170,7 @@ result = guard.guarded_execute(
 
 ```python
 from langchain.agents import Tool
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 guard = KakvedaGuard()
 
@@ -201,7 +197,7 @@ tool = Tool(
 
 ```python
 from flask import Flask
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 app = Flask(__name__)
 guard = KakvedaGuard()
@@ -361,7 +357,7 @@ The guard needs HTTP access to:
 Default assumes Docker network. For localhost development:
 
 ```bash
-KAKVEDA_WARN_URL=http://localhost:8000/warn
+KAKVEDA_WARN_URL=http://localhost:8105/warn
 KAKVEDA_EVENT_BUS_URL=http://localhost:8100/publish
 ```
 
@@ -383,7 +379,7 @@ KAKVEDA_AUTO_APPROVE=false
 ### Development (Permissive)
 
 ```bash
-KAKVEDA_WARN_URL=http://localhost:8000/warn
+KAKVEDA_WARN_URL=http://localhost:8105/warn
 KAKVEDA_EVENT_BUS_URL=http://localhost:8100/publish
 KAKVEDA_APP_ID=dev-agent
 KAKVEDA_ENVIRONMENT=development
@@ -394,7 +390,7 @@ KAKVEDA_AUTO_APPROVE=true
 ### Shadow Mode (Monitoring Only)
 
 ```bash
-KAKVEDA_WARN_URL=http://localhost:8000/warn
+KAKVEDA_WARN_URL=http://localhost:8105/warn
 KAKVEDA_EVENT_BUS_URL=http://localhost:8100/publish
 KAKVEDA_APP_ID=agent-shadow
 KAKVEDA_ENVIRONMENT=staging
@@ -449,7 +445,7 @@ KAKVEDA_AUTO_APPROVE=true   # Approve all
 ```python
 import unittest
 from unittest.mock import patch, MagicMock
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
 class TestKakvedaGuard(unittest.TestCase):
     
@@ -485,11 +481,15 @@ class TestKakvedaGuard(unittest.TestCase):
 ### Manual Testing
 
 ```python
-from kakveda_integration import KakvedaGuard
+from kakveda_sdk.guard import KakvedaGuard
 
-# Run example usage
-if __name__ == "__main__":
-    python kakveda_integration.py
+guard = KakvedaGuard()
+```
+
+Run the examples:
+
+```bash
+python integration_examples.py
 ```
 
 ---

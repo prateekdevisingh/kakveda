@@ -326,7 +326,7 @@ agent_app_phase1.py
 
 ```
 examples/
-├── kakveda_integration.py          ← Core integration layer
+├── kakveda_sdk/                    ← Core SDK integration layer
 ├── integration_examples.py         ← 5 usage patterns
 ├── INTEGRATION.md                  ← Full API reference
 ├── INTEGRATION_SUMMARY.md          ← Implementation guide

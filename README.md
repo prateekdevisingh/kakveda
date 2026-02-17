@@ -209,6 +209,37 @@ kakveda version     # Show version info
 
 Kakveda supports connecting external AI agents for centralized observability, tracing, and failure intelligence. Follow this step-by-step guide to integrate your custom agent.
 
+### SDK Quick Integration (Recommended)
+
+You can integrate **any agent framework** (LangChain, LangGraph, custom Python, etc.) with minimal code using `kakveda_sdk`.
+
+```python
+from kakveda_sdk import KakvedaAgent
+
+agent = KakvedaAgent(capabilities=["my_tool"])
+
+result = agent.execute(
+    prompt=user_input,
+    tool_name="my_tool",
+    execute_fn=my_tool_fn,
+    metadata={"user_id": "123"},
+)
+```
+
+Minimum env vars:
+
+```bash
+KAKVEDA_WARN_URL=http://warning-policy:8105/warn
+KAKVEDA_EVENT_BUS_URL=http://event-bus:8100/publish
+DASHBOARD_URL=http://dashboard:8110
+DASHBOARD_API_KEY=<your-api-key>
+AGENT_NAME=my-agent
+AGENT_APP_ID=my-agent
+AGENT_VERSION=1.0.0
+```
+
+If you want the agent visible in the dashboard with heartbeats, ensure `/health` is exposed (see `examples/langchain-agent-demo/agent_app.py`).
+
 ### Step 1: Start Kakveda Platform
 
 ```bash
