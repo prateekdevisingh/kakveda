@@ -16,6 +16,7 @@ Date: 2026-02-17
 - Demo apps now call `KakvedaAgent.execute()` and use model metadata.
 - Integration examples updated to show SDK usage.
 - Example docs reframed to emphasize SDK-first usage and mark legacy guard steps as reference-only.
+ - Legacy manual integration guides now point to `kakveda_sdk.guard.KakvedaGuard` and avoid removed helpers.
 
 ## Removed
 - Legacy demo helpers `agent_registration.py` and `kakveda_integration.py` (replaced by SDK).
