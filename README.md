@@ -25,31 +25,6 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 
 ---
 
-## ⚡ Netra CLI Quick Reference
-
-| Command / Flag | Purpose |
-|---|---|
-| `kakveda-netra --setup` | Interactive setup and save config |
-| `kakveda-netra --setup --dashboard-api-key ...` | Non-interactive setup with flags |
-| `kakveda-netra --run` | Run in foreground |
-| `kakveda-netra --start` | Run in background |
-| `kakveda-netra --bg-status` | Check background process status |
-| `kakveda-netra --stop` | Stop background process |
-| `kakveda-netra --install-service --scope system` | Install systemd service (system scope) |
-| `kakveda-netra --install-service --scope user` | Install systemd service (user scope) |
-| `kakveda-netra --status --scope system|user` | Check service status |
-| `kakveda-netra --uninstall-service --scope system|user` | Remove service |
-| `--dashboard-url` | Kakveda dashboard URL |
-| `--event-bus-url` | Event bus publish URL |
-| `--dashboard-api-key` | Required dashboard/project API key |
-| `--agent-name --agent-app-id --agent-version` | Agent identity metadata |
-| `--infra-interval --heartbeat-interval` | Collection and heartbeat timing |
-| `--observability-enabled --observability-topic --observability-window` | Observability controls |
-| `--k8s-auto-map-enabled --k8s-auto-map-max-apps --k8s-auto-map-prefix` | Kubernetes app auto-mapping |
-| `--metrics-endpoint-enabled --metrics-endpoint-host --metrics-endpoint-port` | Local `/metrics` endpoint controls |
-
----
-
 ## 🌍 Current Problem and Kakveda’s Resolution
 
 ### What the world is currently facing
@@ -70,14 +45,14 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 
 ---
 
-## ✅ Latest Feature Rollup (Yesterday + Today)
+## ✅ Latest Feature Rollup 
 
-`Yesterday (platform baseline delivered)`:
+`(platform baseline delivered)`:
 - Failure Knowledge Base (GFKB), recurring pattern detection, pre-flight warning flow.
 - Event-driven architecture with trace ingestion, classifier, pattern detector, and health scoring.
 - Dashboard for runs, warnings, evaluations, prompts, experiments, and feedback.
 
-`Today (observability + host coverage strengthened)`:
+`(observability + host coverage strengthened)`:
 - `kakveda-netra` host agent with full infra payload groups:
   - CPU, memory, disk, network, process, file descriptors, system, load, temperature.
   - Docker container metrics with diagnostics (`docker_error`, socket diagnostics).
@@ -265,94 +240,6 @@ kakveda version     # Show version info
 ```
 
 > 💡 Having issues? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common problems and solutions.
-
-## 🛠️ Installation Guide (Platform + Netra)
-
-### A) Install Kakveda Platform (`kakveda-v1.0`)
-
-```bash
-git clone https://github.com/prateekdevisingh/kakveda.git
-cd kakveda/kakveda-v1.0
-docker-compose up -d --build
-```
-
-Verify:
-
-```bash
-curl -i http://localhost:8110/
-curl -i http://localhost:8100/
-```
-
-### B) Install `kakveda-netra` on any host machine
-
-No full Kakveda clone required on host.
-
-```bash
-python3.11 -m venv ~/.venvs/netra
-source ~/.venvs/netra/bin/activate
-pip install -U pip
-pip install "git+https://github.com/prateekdevisingh/kakveda.git#subdirectory=kakveda-aankh"
-```
-
-Configure once:
-
-```bash
-kakveda-netra --setup
-```
-
-Non-interactive example with key:
-
-```bash
-kakveda-netra --setup \
-  --dashboard-url http://localhost:8110 \
-  --event-bus-url http://localhost:8100/publish \
-  --dashboard-api-key "<YOUR_DASHBOARD_API_KEY>" \
-  --agent-name "netra-host-01"
-```
-
-Run options:
-
-```bash
-kakveda-netra --run       # foreground
-kakveda-netra --start     # background
-kakveda-netra --bg-status
-kakveda-netra --stop
-```
-
-Boot-time service:
-
-```bash
-kakveda-netra --install-service --scope system
-kakveda-netra --status --scope system
-```
-
-Important:
-- `DASHBOARD_API_KEY` is mandatory for Netra.
-- Same-host setup can use `localhost`; remote-host setup must use reachable dashboard/event-bus IP or DNS.
-- Netra auto-detects Kubernetes kubeconfig from `KUBECONFIG`, `~/.kube/config`, and sudo user kubeconfig path.
-
-### C) Integration verification
-
-1. `Agents` page: Netra host should appear with heartbeat.
-2. `/infra`: host and container metrics should show.
-3. `/observability`: golden signals and reliability panels should show.
-
-See full host guide: [docs/netra-host-install.md](docs/netra-host-install.md)
-
-## ⚖️ Why `kakveda-netra` is better for this use case
-
-| Area | Kakveda + Netra | Typical multi-tool setup |
-|---|---|---|
-| Host integration | Single native agent | Multiple agents/connectors |
-| Data model | Unified infra + observability + AI/agent context | Split across tools and schemas |
-| Setup effort | Few commands + one dashboard API key | Multiple onboarding steps, tokens, mappings |
-| Governance | Self-host first, data control friendly | Often SaaS-first ingestion pipelines |
-| AI failure intelligence linkage | Native with GFKB + preflight warning pipeline | Usually external/manual correlation |
-
-Netra is purpose-built to integrate directly with `kakveda-v1.0` using one path:
-- collect once,
-- push once,
-- visualize and correlate in one platform.
 
 
 ### Demo Accounts (auto‑created)
