@@ -25,6 +25,31 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 
 ---
 
+## ⚡ Netra CLI Quick Reference
+
+| Command / Flag | Purpose |
+|---|---|
+| `kakveda-netra --setup` | Interactive setup and save config |
+| `kakveda-netra --setup --dashboard-api-key ...` | Non-interactive setup with flags |
+| `kakveda-netra --run` | Run in foreground |
+| `kakveda-netra --start` | Run in background |
+| `kakveda-netra --bg-status` | Check background process status |
+| `kakveda-netra --stop` | Stop background process |
+| `kakveda-netra --install-service --scope system` | Install systemd service (system scope) |
+| `kakveda-netra --install-service --scope user` | Install systemd service (user scope) |
+| `kakveda-netra --status --scope system|user` | Check service status |
+| `kakveda-netra --uninstall-service --scope system|user` | Remove service |
+| `--dashboard-url` | Kakveda dashboard URL |
+| `--event-bus-url` | Event bus publish URL |
+| `--dashboard-api-key` | Required dashboard/project API key |
+| `--agent-name --agent-app-id --agent-version` | Agent identity metadata |
+| `--infra-interval --heartbeat-interval` | Collection and heartbeat timing |
+| `--observability-enabled --observability-topic --observability-window` | Observability controls |
+| `--k8s-auto-map-enabled --k8s-auto-map-max-apps --k8s-auto-map-prefix` | Kubernetes app auto-mapping |
+| `--metrics-endpoint-enabled --metrics-endpoint-host --metrics-endpoint-port` | Local `/metrics` endpoint controls |
+
+---
+
 ## 🌍 Current Problem and Kakveda’s Resolution
 
 ### What the world is currently facing
