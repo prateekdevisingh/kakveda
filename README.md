@@ -91,6 +91,52 @@ This keeps integration simple:
 
 ---
 
+## 💵 Direct Monthly Price Comparison (USD)
+
+> Pricing snapshot date: **February 28, 2026**. Values are public starting prices and can change by region, volume, and contract.
+
+### Infra Monitoring
+
+| Platform | Public starting monthly price | Billing basis |
+|---|---:|---|
+| **Kakveda + Netra (OSS)** | **$0 license/mo** | Self-hosted |
+| Datadog Infrastructure Pro | $15 (annual) / $18 (month-to-month) | per host |
+| Splunk AppDynamics Infrastructure Edition | $6 | per vCPU |
+| Dynatrace Infrastructure Monitoring | $29 | per host |
+
+### Observability (APM / Logs / Metrics)
+
+| Platform | Public starting monthly price | Billing basis |
+|---|---:|---|
+| **Kakveda + Netra (OSS)** | **$0 license/mo** | Self-hosted |
+| Datadog APM (Standard) | $31 | per host |
+| Datadog Log Management | $0.10 | per GB ingested |
+| Logz.io Infrastructure Monitoring | ~$12.00 | per 1000 time-series/mo (from $0.40/day) |
+| Logz.io Log Management | ~$27.60 | per GB/mo (from $0.92/day) |
+
+### AI / Agent / LLM Monitoring
+
+| Platform | Public starting monthly price | Billing basis |
+|---|---:|---|
+| **Kakveda (OSS)** | **$0 license/mo** | Self-hosted |
+| LangSmith Plus | $39 | per seat (+ usage) |
+| Weights & Biases Team | $50 | per user |
+| Arize AI | Contact sales | custom |
+| MLflow OSS | $0 license/mo | Self-hosted |
+
+Detailed matrix and notes: [docs/COMPARISON.md](docs/COMPARISON.md)
+
+Pricing sources:
+- Datadog: https://www.datadoghq.com/pricing/list/
+- Splunk AppDynamics / Observability: https://www.splunk.com/en_us/products/pricing/it-operations.html
+- Dynatrace: https://www.dynatrace.com/pricing/
+- Logz.io: https://logz.io/pricing/
+- LangSmith: https://www.langchain.com/pricing
+- Weights & Biases: https://wandb.ai/site/pricing
+- Arize AI: https://arize.com/pricing/
+
+---
+
 ## ✨ What this project does
 
 * Stores failures in a **Global Failure Knowledge Base (GFKB)**

@@ -80,21 +80,60 @@ clarify where it fits and how it can be complementary.
 | LangSmith | ❌ Infra not primary | ⚠️ Tracing-focused | ✅ | ❌ |
 | MLflow | ❌ Infra not primary | ⚠️ Experiment/metrics focused | ⚠️ Partial | ❌ |
 
-### Cost Factors (Practical, Indicative)
+### Direct Monthly Cost Comparison (Infra + Observability + AI/LLM)
 
-> Exact prices change frequently by plan/region/volume.  
-> Focus below is on **cost drivers** teams actually feel in production.
+> Snapshot date: **February 28, 2026**. Public pricing can change by region, commitment, and volume.
 
-| Tool | Typical Pricing Model | Primary Cost Drivers | Cost Predictability |
+#### Infra Monitoring (Host / Node level)
+
+| Platform | Public starting monthly price | Billing basis | Notes |
+|---|---:|---|---|
+| Kakveda + Netra (OSS) | **$0 license/mo** | self-hosted | Infra/compute cost is your own cloud/on-prem spend |
+| Datadog Infrastructure Pro | $15 (annual) / $18 (month-to-month) | per host/mo | Public list pricing |
+| Splunk AppDynamics Infrastructure Edition | $6 | per vCPU/mo | Public pricing |
+| Dynatrace Infrastructure Monitoring | $29 | per host/mo | Public pricing |
+
+#### Observability (APM / Logs / Metrics)
+
+| Platform | Public starting monthly price | Billing basis | Notes |
+|---|---:|---|---|
+| Kakveda + Netra (OSS) | **$0 license/mo** | self-hosted | Logs/metrics/traces storage cost depends on your infra sizing |
+| Datadog APM (Standard) | $31 | per host/mo | Infra cost additional |
+| Datadog Log Management | $0.10 | per GB ingested | Usage based, monthly bill varies by volume |
+| Logz.io Infrastructure Monitoring | $0.40/day (~$12/mo) | per 1000 time-series/day | Annual billing basis shown on pricing page |
+| Logz.io Log Management | $0.92/day (~$27.60/mo) | per GB/day | Annual billing basis shown on pricing page |
+
+#### AI / Agent / LLM Observability
+
+| Platform | Public starting monthly price | Billing basis | Notes |
+|---|---:|---|---|
+| Kakveda (OSS) | **$0 license/mo** | self-hosted | Native failure memory + warnings + agent observability |
+| LangSmith Plus | $39 | per seat/mo (+ usage) | Public pricing |
+| Weights & Biases | $50 | per user/mo (Team plan) | Public pricing |
+| Arize AI | Contact sales | custom | Public page does not publish a universal flat monthly list rate |
+| MLflow OSS | **$0 license/mo** | self-hosted | Infra/ops cost separate |
+
+#### Cost Driver Summary
+
+| Tool | Typical pricing model | Primary cost drivers | Cost predictability |
 |---|---|---|---|
 | Kakveda (OSS) | Self-host / infra cost | Compute, storage, ops overhead | High (you control infra) |
 | Datadog | SaaS subscription + usage | Host count, ingestion volume, retention, premium modules | Medium-Low at high scale |
-| AppDynamics | Enterprise licensing | Agent/APM coverage, enterprise tiering | Medium (contract dependent) |
+| AppDynamics | Enterprise licensing | vCPU/app coverage, enterprise tiering | Medium (contract dependent) |
 | Logz.io | SaaS usage tiers | Log volume, retention, indexed data, add-on modules | Medium |
-| LangSmith | SaaS usage | Traces, events, team scale | Medium |
-| Arize AI | SaaS usage | Model/events volume, retention, advanced monitoring | Medium |
-| W&B | SaaS / hybrid | Seats, artifacts, usage | Medium |
+| LangSmith | SaaS seat + usage | Seats, traces, evaluation usage | Medium |
+| Arize AI | SaaS usage/contract | Event volume, retention, advanced monitoring | Medium |
+| W&B | SaaS seat-based | Seats, artifacts, usage | Medium |
 | MLflow (OSS) | Self-host / infra cost | Storage backend, tracking DB, ops | High (self-managed) |
+
+Pricing sources:
+- Datadog: https://www.datadoghq.com/pricing/list/
+- Splunk AppDynamics / Observability: https://www.splunk.com/en_us/products/pricing/it-operations.html
+- Dynatrace: https://www.dynatrace.com/pricing/
+- Logz.io: https://logz.io/pricing/
+- LangSmith: https://www.langchain.com/pricing
+- Weights & Biases: https://wandb.ai/site/pricing
+- Arize AI: https://arize.com/pricing/
 
 ### Real-World Cost Pattern
 
@@ -170,19 +209,19 @@ This makes Kakveda **complementary**, not a replacement, to:
 
 ---
 
-## Pricing (Indicative)
+## Pricing Model Snapshot
 
-> Pricing information is indicative and subject to change.
-> Included here only to clarify deployment and access models.
-
-| Tool | Model | Notes |
+| Tool | Model | Entry pricing visibility |
 |-----|------|-------|
-| Kakveda | Open source | Self-hosted |
-| Datadog | SaaS | Per-host / usage |
-| LangSmith | SaaS | Per-trace |
-| Arize AI | SaaS | Usage-based |
-| MLflow | Open source | Self-hosted |
-| W&B | SaaS / Hybrid | Per-user |
+| Kakveda | Open source | Public ($0 license) |
+| Datadog | SaaS | Public list pricing |
+| Splunk AppDynamics | SaaS/Enterprise | Public starting tiers + enterprise options |
+| Dynatrace | SaaS | Public list pricing |
+| Logz.io | SaaS | Public list pricing |
+| LangSmith | SaaS | Public seat pricing |
+| Arize AI | SaaS | Contact sales |
+| MLflow | Open source | Public ($0 license) |
+| W&B | SaaS / Hybrid | Public team seat pricing |
 
 ---
 
