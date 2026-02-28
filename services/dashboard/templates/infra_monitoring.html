@@ -1,0 +1,660 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Infra Monitoring</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .wrap { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 14px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+    .card-link { display:block; color:inherit; text-decoration:none; }
+    .card-link:hover { text-decoration:none; }
+    .clickable-card { cursor: pointer; }
+    .value { font-size: 1.6em; font-weight: 700; color: #60a5fa; margin-top: 4px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 10px; }
+    thead th { background: rgba(0,0,0,0.3); padding: 10px 12px; font-size: 0.78em; text-transform: uppercase; color: var(--muted); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(36,48,74,0.5); font-size: 0.9em; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+    .status-ok { color: #86efac; }
+    .status-warn { color: #fcd34d; }
+    .status-bad { color: #fca5a5; }
+    .alert-box { border: 1px solid rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); color: #fecaca; border-radius: 10px; padding: 8px 10px; margin-top: 8px; }
+    .danger { color: #fecaca; font-weight: 700; }
+    .table-alert { background: rgba(239,68,68,0.08); }
+    .hover-tip { position: fixed; pointer-events: none; z-index: 50; background: rgba(10,14,24,0.96); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.35); border-radius: 6px; padding: 4px 8px; font-size: 12px; display: none; }
+    @media (max-width: 1200px) { .grid { grid-template-columns: 1fr 1fr; } .charts { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } .wrap { padding: 14px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      <span class="pill">Infra Monitoring</span>
+    </div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/infra" class="active">Infra</a>
+      <a href="/observability">Observability</a>
+      <a href="/agents">Agents</a>
+      <a href="/runs">Runs</a>
+      <a href="/warnings">Warnings</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if request.query_params.get("message") %}
+      <div class="alert-box" style="border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.12); color: #bbf7d0;">
+        {{ request.query_params.get("message") }}
+      </div>
+    {% endif %}
+    {% if request.query_params.get("error") %}
+      <div class="alert-box">{{ request.query_params.get("error") }}</div>
+    {% endif %}
+
+    <div class="card">
+      <form method="get" action="/infra" class="row">
+        <label class="small" for="agent_id">Agent</label>
+        <select name="agent_id" id="agent_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (agent_choices or []) %}
+            <option value="{{ a }}" {% if selected_agent == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="q" value="{{ q }}" placeholder="query: agent/app/hostname" class="btn secondary" style="padding:6px 10px; min-width:220px;" />
+        <select name="custom_metric" class="btn secondary" style="padding:6px 8px; min-width:180px;" title="Custom metric 1">
+          {% for m in metric_choices %}
+            <option value="{{ m }}" {% if custom_metric == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        <select name="custom_metric_2" class="btn secondary" style="padding:6px 8px; min-width:180px;" title="Custom metric 2">
+          {% for m in metric_choices %}
+            <option value="{{ m }}" {% if custom_metric_2 == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        <label class="small" for="cpu_threshold">CPU%</label>
+        <input id="cpu_threshold" type="number" step="0.1" name="cpu_threshold" value="{{ thresholds.cpu_threshold }}" title="CPU %" class="btn secondary" style="padding:6px 8px; width:95px;" />
+        <label class="small" for="memory_threshold">Memory%</label>
+        <input id="memory_threshold" type="number" step="0.1" name="memory_threshold" value="{{ thresholds.memory_threshold }}" title="Memory %" class="btn secondary" style="padding:6px 8px; width:95px;" />
+        <label class="small" for="disk_threshold">Disk%</label>
+        <input id="disk_threshold" type="number" step="0.1" name="disk_threshold" value="{{ thresholds.disk_threshold }}" title="Disk %" class="btn secondary" style="padding:6px 8px; width:95px;" />
+        <label class="small" for="load_threshold">Load/Core</label>
+        <input id="load_threshold" type="number" step="0.1" name="load_threshold" value="{{ thresholds.load_threshold }}" title="Load/Core" class="btn secondary" style="padding:6px 8px; width:95px;" />
+        <label class="small" for="temp_threshold">Temp C</label>
+        <input id="temp_threshold" type="number" step="1" name="temp_threshold" value="{{ thresholds.temp_threshold }}" title="Temp C" class="btn secondary" style="padding:6px 8px; width:95px;" />
+        <label class="small" for="collection_ms_threshold">Collection ms</label>
+        <input id="collection_ms_threshold" type="number" step="1" name="collection_ms_threshold" value="{{ thresholds.collection_ms_threshold }}" title="Collection ms" class="btn secondary" style="padding:6px 8px; width:115px;" />
+        <button class="btn" type="submit" style="padding:7px 14px;">Apply</button>
+      </form>
+      {% if threshold_message %}
+      <div class="small danger" style="margin-top:8px;">Threshold validation: {{ threshold_message }}</div>
+      {% endif %}
+      <form method="post" action="/infra/layouts/save" class="row" style="margin-top:10px;">
+        {{ csrf_input(request) | safe }}
+        <input type="text" name="layout_name" placeholder="layout name" class="btn secondary" style="padding:6px 10px; min-width:180px;" />
+        <label class="small"><input type="checkbox" name="set_default" value="true" /> Set default</label>
+        <input type="hidden" name="agent_id" value="{{ selected_agent }}" />
+        <input type="hidden" name="q" value="{{ q }}" />
+        <input type="hidden" name="custom_metric" value="{{ custom_metric }}" />
+        <input type="hidden" name="custom_metric_2" value="{{ custom_metric_2 }}" />
+        <input type="hidden" name="cpu_threshold" value="{{ thresholds.cpu_threshold }}" />
+        <input type="hidden" name="memory_threshold" value="{{ thresholds.memory_threshold }}" />
+        <input type="hidden" name="disk_threshold" value="{{ thresholds.disk_threshold }}" />
+        <input type="hidden" name="load_threshold" value="{{ thresholds.load_threshold }}" />
+        <input type="hidden" name="temp_threshold" value="{{ thresholds.temp_threshold }}" />
+        <input type="hidden" name="collection_ms_threshold" value="{{ thresholds.collection_ms_threshold }}" />
+        <button class="btn secondary" type="submit" style="padding:7px 12px;">Save Layout</button>
+      </form>
+      <form method="post" action="/infra/layouts/import" enctype="multipart/form-data" class="row" style="margin-top:8px;">
+        {{ csrf_input(request) | safe }}
+        <input type="file" name="layout_file" accept=".yaml,.yml,text/yaml,application/x-yaml" class="btn secondary" style="padding:6px 8px;" />
+        <button class="btn secondary" type="submit" style="padding:7px 12px;">Import YAML</button>
+      </form>
+      {% if saved_layouts and saved_layouts|length > 0 %}
+        <div class="row" style="margin-top:8px;">
+          <span class="small">Saved layouts:</span>
+          {% for l in saved_layouts %}
+            <a class="btn secondary" style="padding:5px 10px;" href="/infra?agent_id={{ l.config.agent_id or '' }}&q={{ l.config.q or '' }}&custom_metric={{ l.config.custom_metric or 'cpu_percent_total' }}&custom_metric_2={{ l.config.custom_metric_2 or 'memory_percent' }}&cpu_threshold={{ l.config.cpu_threshold or thresholds.cpu_threshold }}&memory_threshold={{ l.config.memory_threshold or thresholds.memory_threshold }}&disk_threshold={{ l.config.disk_threshold or thresholds.disk_threshold }}&load_threshold={{ l.config.load_threshold or thresholds.load_threshold }}&temp_threshold={{ l.config.temp_threshold or thresholds.temp_threshold }}&collection_ms_threshold={{ l.config.collection_ms_threshold or thresholds.collection_ms_threshold }}">
+              {{ l.name }}{% if l.is_default %}*{% endif %}
+            </a>
+            <span class="small">id={{ l.layout_uid }}</span>
+            <a class="btn secondary" style="padding:5px 8px;" href="/infra/layouts/export/{{ l.id }}">export</a>
+            <form method="post" action="/infra/layouts/delete" style="display:inline;">
+              {{ csrf_input(request) | safe }}
+              <input type="hidden" name="layout_id" value="{{ l.id }}" />
+              <button class="btn secondary" type="submit" style="padding:5px 8px;">x</button>
+            </form>
+          {% endfor %}
+        </div>
+      {% endif %}
+      <div class="small" style="margin-top:8px;">Threshold inputs order: CPU%, Memory%, Disk%, Load/Core, Temp(C), Collection(ms)</div>
+      <div class="small" style="margin-top:6px;">Snapshots: {{ snapshot_count_filtered }} / {{ snapshot_count_total }}</div>
+      {% if filter_message %}
+        <div class="alert-box" style="border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.12); color: #fde68a;">
+          <strong>Filter info:</strong> {{ filter_message }}
+        </div>
+      {% endif %}
+      {% if alerts and alerts|length > 0 %}
+        {% for a in alerts %}
+          <div class="alert-box">
+            <strong>Alert:</strong> {{ a.metric }} crossed threshold. Current={{ a.value }}{{ a.unit }} Threshold={{ a.threshold }}{{ a.unit }}
+            <div class="small">System ID: <strong>{{ a.system_id }}</strong> | Host: <strong>{{ a.hostname or 'unknown' }}</strong></div>
+          </div>
+        {% endfor %}
+      {% endif %}
+      <div class="row" style="margin-top:8px;">
+        <a class="btn secondary" href="/infra" style="padding:6px 10px;">Reset Filters</a>
+      </div>
+    </div>
+
+    {% if latest %}
+    <div class="grid">
+      <div class="card clickable-card" data-href="/infra/detail?metric=cpu_percent_total&agent_id={{ selected_agent }}&q={{ q }}">
+        <a class="card-link" href="/infra/detail?metric=cpu_percent_total&agent_id={{ selected_agent }}&q={{ q }}">
+          <div class="small">System Health</div>
+          <div class="value {% if latest.system_health_score >= 80 %}status-ok{% elif latest.system_health_score >= 60 %}status-warn{% else %}status-bad{% endif %}">
+            {{ latest.system_health_score|round(1) }}
+          </div>
+        </a>
+      </div>
+      <div class="card clickable-card" data-href="/infra/detail?metric=cpu_percent_total&agent_id={{ selected_agent }}&q={{ q }}">
+        <a class="card-link" href="/infra/detail?metric=cpu_percent_total&agent_id={{ selected_agent }}&q={{ q }}">
+          <div class="small">CPU Usage</div><div class="value">{{ latest.cpu_percent_total|round(1) }}%</div>
+        </a>
+      </div>
+      <div class="card clickable-card" data-href="/infra/detail?metric=memory_percent&agent_id={{ selected_agent }}&q={{ q }}">
+        <a class="card-link" href="/infra/detail?metric=memory_percent&agent_id={{ selected_agent }}&q={{ q }}">
+          <div class="small">Memory Usage</div><div class="value">{{ latest.memory_percent|round(1) }}%</div>
+        </a>
+      </div>
+      <div class="card clickable-card" data-href="/infra/detail?metric=load_average_1m&agent_id={{ selected_agent }}&q={{ q }}">
+        <a class="card-link" href="/infra/detail?metric=load_average_1m&agent_id={{ selected_agent }}&q={{ q }}">
+          <div class="small">Load (1m)</div><div class="value">{{ latest.load_average_1m|round(2) }}</div>
+        </a>
+      </div>
+      <div class="card clickable-card" data-href="/infra/detail?metric=docker_count&agent_id={{ selected_agent }}&q={{ q }}">
+        <a class="card-link" href="/infra/detail?metric=docker_count&agent_id={{ selected_agent }}&q={{ q }}">
+          <div class="small">Docker Containers</div><div class="value">{{ latest.docker_count }}</div>
+        </a>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:14px;">
+      <div class="small" style="margin-bottom:6px;">Metric Drill-down</div>
+      <div class="row">
+        <a class="btn secondary" href="/infra/detail?metric=cpu_percent_total&agent_id={{ selected_agent }}&q={{ q }}">CPU</a>
+        <a class="btn secondary" href="/infra/detail?metric=memory_percent&agent_id={{ selected_agent }}&q={{ q }}">Memory</a>
+        <a class="btn secondary" href="/infra/detail?metric=load_average_1m&agent_id={{ selected_agent }}&q={{ q }}">Load</a>
+        <a class="btn secondary" href="/infra/detail?metric=disk_used_percent&agent_id={{ selected_agent }}&q={{ q }}">Disk</a>
+        <a class="btn secondary" href="/infra/detail?metric=network_bytes_per_sec&agent_id={{ selected_agent }}&q={{ q }}">Network</a>
+        <a class="btn secondary" href="/infra/detail?metric=process_running_count&agent_id={{ selected_agent }}&q={{ q }}">Process</a>
+        <a class="btn secondary" href="/infra/detail?metric=collection_duration_ms&agent_id={{ selected_agent }}&q={{ q }}">Collection</a>
+        <a class="btn secondary" href="/infra/detail?metric=fd_utilization_percent&agent_id={{ selected_agent }}&q={{ q }}">FD</a>
+        <a class="btn secondary" href="/infra/detail?metric=cpu_temperature&agent_id={{ selected_agent }}&q={{ q }}">Temperature</a>
+        <a class="btn secondary" href="/infra/detail?metric=swap_percent&agent_id={{ selected_agent }}&q={{ q }}">Swap</a>
+        <a class="btn secondary" href="/infra/detail?metric=docker_count&agent_id={{ selected_agent }}&q={{ q }}">Docker</a>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card"><div class="small">Health Trend</div><canvas id="healthChart" height="110"></canvas></div>
+      <div class="card"><div class="small">CPU Trend</div><canvas id="cpuChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Memory Trend</div><canvas id="memChart" height="110"></canvas></div>
+    </div>
+    <div class="charts">
+      <div class="card"><div class="small">Load Trend</div><canvas id="loadChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Disk Used % Trend</div><canvas id="diskChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Network Throughput (B/s)</div><canvas id="netChart" height="110"></canvas></div>
+    </div>
+    <div class="charts">
+      <div class="card"><div class="small">Running Processes</div><canvas id="procChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Collection Duration (ms)</div><canvas id="collectChart" height="110"></canvas></div>
+      <div class="card"><div class="small">FD Utilization %</div><canvas id="fdChart" height="110"></canvas></div>
+    </div>
+    <div class="charts">
+      <div class="card"><div class="small">CPU Temperature (C)</div><canvas id="tempChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Swap %</div><canvas id="swapChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Docker Count</div><canvas id="dockerChart" height="110"></canvas></div>
+    </div>
+    <div class="charts">
+      <div class="card" style="grid-column: span 3;">
+        <div class="small">Custom Chart: {{ custom_metric }} vs {{ custom_metric_2 }}</div>
+        <canvas id="customChart" height="120"></canvas>
+      </div>
+    </div>
+    <div class="charts">
+      <div class="card" style="grid-column: span 3;">
+        <h3 style="margin:0 0 8px;">Problematic Systems</h3>
+        <table>
+          <thead><tr><th>System ID</th><th>Host</th><th>Breach Count</th><th>Worst Health</th><th>Latest Seen</th></tr></thead>
+          <tbody>
+            {% for s in problematic_systems %}
+            <tr class="table-alert">
+              <td><span class="pill">{{ s.system_id }}</span></td>
+              <td>{{ s.hostname or '-' }}</td>
+              <td class="danger">{{ s.breach_count }}</td>
+              <td>{{ s.worst_health|round(2) }}</td>
+              <td>{{ s.latest_ts }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No problematic systems by current thresholds.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Time Data</h3>
+        <table>
+          <tbody>
+            <tr><td class="small">Snapshots</td><td><strong>{{ time_data.snapshot_count }}</strong></td></tr>
+            <tr><td class="small">Avg interval</td><td><strong>{{ time_data.avg_interval_sec }}s</strong></td></tr>
+            <tr><td class="small">Latest age</td><td><strong>{{ time_data.latest_age_sec }}s</strong></td></tr>
+            <tr><td class="small">Collection timing</td><td><strong>{% if time_data.has_time_data %}available{% else %}missing{% endif %}</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card"></div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Current System</h3>
+        <div class="small">System ID: <strong>{{ latest.system_id }}</strong></div>
+        <div class="small">Host: <strong>{{ latest.hostname or 'unknown' }}</strong></div>
+        <div class="small">App: <strong>{{ latest.app_id }}</strong></div>
+        <div class="small">Uptime: <strong>{{ latest.uptime_seconds }}s</strong></div>
+        <div class="small">CPU Temp: <strong>{{ latest.cpu_temperature|round(2) }}C</strong></div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top Disk Usage</h3>
+        <table>
+          <thead><tr><th>Mount</th><th>Used</th><th>Total</th><th>%</th></tr></thead>
+          <tbody>
+            {% for d in top_disk %}
+            <tr>
+              <td>{{ d.mountpoint }}</td>
+              <td>{{ d.disk_used_bytes|int }}</td>
+              <td>{{ d.disk_total_bytes|int }}</td>
+              <td>{{ d.disk_percent|round(1) }}%</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="small">No disk data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="grid-column: span 2;">
+        <h3 style="margin:0 0 8px;">Top Network Interfaces</h3>
+        <table>
+          <thead><tr><th>Interface</th><th>Recv</th><th>Sent</th><th>Conn</th><th>Listen</th></tr></thead>
+          <tbody>
+            {% for n in top_network %}
+            <tr>
+              <td>{{ n.interface }}</td>
+              <td>{{ n.net_bytes_recv|int }}</td>
+              <td>{{ n.net_bytes_sent|int }}</td>
+              <td>{{ n.net_connections_total }}</td>
+              <td>{{ n.net_listen_sockets }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No network data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top CPU Processes</h3>
+        <table>
+          <thead><tr><th>PID</th><th>Name</th><th>CPU%</th><th>RSS</th></tr></thead>
+          <tbody>
+            {% for p in latest_top_cpu_processes %}
+            <tr>
+              <td>{{ p.pid }}</td>
+              <td>{{ p.name }}</td>
+              <td>{{ p.cpu_percent|round(2) }}</td>
+              <td>{{ p.memory_rss_bytes|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="small">No process data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top Memory Processes</h3>
+        <table>
+          <thead><tr><th>PID</th><th>Name</th><th>Mem%</th><th>RSS</th></tr></thead>
+          <tbody>
+            {% for p in latest_top_mem_processes %}
+            <tr>
+              <td>{{ p.pid }}</td>
+              <td>{{ p.name }}</td>
+              <td>{{ p.memory_percent|round(2) }}</td>
+              <td>{{ p.memory_rss_bytes|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="small">No process data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Docker Containers</h3>
+        {% if latest_docker_error %}
+        <div class="small danger" style="margin-bottom:8px;">
+          Docker diagnostics: {{ latest_docker_error }}
+          {% if latest_docker_socket_path %}(socket={{ latest_docker_socket_path }}){% endif %}
+        </div>
+        {% endif %}
+        <table>
+          <thead><tr><th>Name</th><th>Status</th><th>Mem Usage</th><th>Restarts</th></tr></thead>
+          <tbody>
+            {% for c in latest_docker %}
+            <tr>
+              <td>{{ c.container_name }}</td>
+              <td>{{ c.container_status }}</td>
+              <td>{{ c.container_memory_usage|int }}</td>
+              <td>{{ c.container_restart_count }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="small">{% if latest_docker_error %}No docker data (see diagnostics above){% else %}No docker data{% endif %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px;">All Containers Inventory (Latest Per System)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>System ID</th>
+            <th>Host</th>
+            <th>Container</th>
+            <th>Status</th>
+            <th>CPU%</th>
+            <th>Mem Usage</th>
+            <th>Mem Limit</th>
+            <th>Net RX</th>
+            <th>Net TX</th>
+            <th>Blk Read</th>
+            <th>Blk Write</th>
+            <th>Restarts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in all_containers %}
+          <tr>
+            <td><span class="pill">{{ c.system_id }}</span></td>
+            <td>{{ c.hostname or '-' }}</td>
+            <td>{{ c.container_name }}</td>
+            <td>{{ c.container_status }}</td>
+            <td>{{ c.container_cpu_percent|round(2) }}</td>
+            <td>{{ c.container_memory_usage|int }}</td>
+            <td>{{ c.container_memory_limit|int }}</td>
+            <td>{{ c.net_rx_bytes|int }}</td>
+            <td>{{ c.net_tx_bytes|int }}</td>
+            <td>{{ c.blk_read_bytes|int }}</td>
+            <td>{{ c.blk_write_bytes|int }}</td>
+            <td>{{ c.container_restart_count }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="12" class="small">{% if latest_docker_error %}No container metrics available. Diagnostics: {{ latest_docker_error }}{% else %}No container metrics available from any system snapshot.{% endif %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Data Coverage</h3>
+      <div class="small">
+        cpu={{ data_coverage.cpu }},
+        memory={{ data_coverage.memory }},
+        disk={{ data_coverage.disk }},
+        network={{ data_coverage.network }},
+        process={{ data_coverage.process }},
+        fd={{ data_coverage.fd }},
+        temperature={{ data_coverage.temperature }},
+        docker={{ data_coverage.docker }},
+        docker_error={{ data_coverage.docker_error or 'none' }},
+        docker_socket={{ data_coverage.docker_socket_path or 'none' }},
+        time_data={{ data_coverage.time_data }}
+      </div>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="small">No infra snapshots found yet. Ensure host agent is publishing <span class="pill">infra.metrics</span>.</div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Recent Snapshots</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Agent</th><th>CPU%</th><th>Mem%</th><th>Load1m</th><th>FD Open</th><th>FD Max</th></tr></thead>
+        <tbody>
+          {% for s in snapshots %}
+          <tr class="{% if s.cpu_percent_total > thresholds.cpu_threshold or s.memory_percent > thresholds.memory_threshold or s.disk_used_percent > thresholds.disk_threshold or (s.load_average_1m / (s.cpu_count_logical if s.cpu_count_logical > 0 else 1)) > thresholds.load_threshold or s.collection_duration_ms > thresholds.collection_ms_threshold %}table-alert{% endif %}">
+            <td>{{ s.ts }}</td>
+            <td><span class="pill">{{ s.agent_id }}</span></td>
+            <td {% if s.cpu_percent_total > thresholds.cpu_threshold %}class="danger"{% endif %}>{{ s.cpu_percent_total|round(2) }}</td>
+            <td {% if s.memory_percent > thresholds.memory_threshold %}class="danger"{% endif %}>{{ s.memory_percent|round(2) }}</td>
+            <td {% if (s.load_average_1m / (s.cpu_count_logical if s.cpu_count_logical > 0 else 1)) > thresholds.load_threshold %}class="danger"{% endif %}>{{ s.load_average_1m|round(2) }}</td>
+            <td>{{ s.open_file_descriptors }}</td>
+            <td>{{ s.max_file_descriptors }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="small">No records</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div id="hoverTip" class="hover-tip"></div>
+
+  <script>
+    function bindFallbackTooltip(elId, points, unit) {
+      var canvas = document.getElementById(elId);
+      var tip = document.getElementById('hoverTip');
+      if (!canvas || !tip || !points || !points.length) return;
+      canvas.addEventListener('mousemove', function (ev) {
+        var rect = canvas.getBoundingClientRect();
+        var x = ev.clientX - rect.left;
+        var idx = Math.max(0, Math.min(points.length - 1, Math.round((x / Math.max(rect.width, 1)) * (points.length - 1))));
+        var p = points[idx] || {};
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY + 12) + 'px';
+        tip.textContent = (p.ts || '') + ' | ' + Number(p.value || 0).toFixed(2) + (unit ? (' ' + unit) : '');
+      });
+      canvas.addEventListener('mouseleave', function () {
+        tip.style.display = 'none';
+      });
+    }
+
+    function drawFallbackLine(elId, points, color, label, unit) {
+      var canvas = document.getElementById(elId);
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      var w = canvas.clientWidth || 500;
+      var h = canvas.height || 110;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      if (!points || !points.length) {
+        ctx.fillStyle = '#9aa8bf';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('No data', 12, 20);
+        return;
+      }
+
+      var vals = points.map(function (p) {
+        var v = Number(p.value);
+        return Number.isFinite(v) ? v : 0;
+      });
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+      if (min === max) max = min + 1;
+      var padLeft = 42, padBottom = 20, padTop = 10, padRight = 10;
+
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(w - padRight, h - padBottom);
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(padLeft, padTop);
+      ctx.stroke();
+      ctx.fillStyle = '#9aa8bf';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Time', w - 34, h - 4);
+      ctx.fillText(String(Number(max).toFixed(1)), 4, padTop + 4);
+      ctx.fillText(String(Number(min).toFixed(1)), 4, h - padBottom + 4);
+      if (label) ctx.fillText(label + (unit ? ' (' + unit + ')' : ''), 4, h / 2);
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (var i = 0; i < vals.length; i++) {
+        var x = padLeft + ((w - padLeft - padRight) * i) / Math.max(vals.length - 1, 1);
+        var y = h - padBottom - ((h - padTop - padBottom) * (vals[i] - min)) / (max - min);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      bindFallbackTooltip(elId, points, unit);
+    }
+
+    function buildLineChart(elId, points, color, label, unit) {
+      var ctx = document.getElementById(elId);
+      if (!ctx) return;
+      if (!points || !points.length) {
+        drawFallbackLine(elId, [], color, label, unit);
+        return;
+      }
+      if (!window.Chart) {
+        drawFallbackLine(elId, points, color, label, unit);
+        return;
+      }
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: points.map(function(p){ return p.ts; }),
+          datasets: [{
+            label: label + (unit ? (' (' + unit + ')') : ''),
+            data: points.map(function(p){ return p.value; }),
+            borderColor: color,
+            backgroundColor: 'rgba(37,99,235,0.12)',
+            fill: true,
+            tension: 0.25
+          }]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              callbacks: {
+                label: function(context) {
+                  var v = context.parsed && typeof context.parsed.y === 'number' ? context.parsed.y : 0;
+                  return label + ': ' + Number(v).toFixed(2) + (unit ? (' ' + unit) : '');
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              ticks: { color: '#9aa8bf' },
+              title: { display: true, text: 'Time', color: '#9aa8bf' },
+              grid: { color: 'rgba(148,163,184,0.15)' }
+            },
+            y: {
+              display: true,
+              ticks: { color: '#9aa8bf' },
+              title: { display: true, text: label + (unit ? (' (' + unit + ')') : ''), color: '#9aa8bf' },
+              grid: { color: 'rgba(148,163,184,0.15)' }
+            }
+          }
+        }
+      });
+    }
+    function buildDualChart(elId, pointsA, pointsB, labelA, labelB, unitA, unitB) {
+      var ctx = document.getElementById(elId);
+      if (!ctx || !window.Chart || !pointsA || !pointsA.length) {
+        drawFallbackLine(elId, pointsA || [], '#60a5fa', labelA, unitA);
+        return;
+      }
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: pointsA.map(function(p){ return p.ts; }),
+          datasets: [
+            { label: labelA + (unitA ? (' (' + unitA + ')') : ''), data: pointsA.map(function(p){ return p.value; }), borderColor: '#60a5fa', backgroundColor: 'rgba(96,165,250,0.10)', fill: false, tension: 0.2 },
+            { label: labelB + (unitB ? (' (' + unitB + ')') : ''), data: (pointsB || []).map(function(p){ return p.value; }), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.10)', fill: false, tension: 0.2 }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { display: true, labels: { color: '#9aa8bf' } } },
+          scales: {
+            x: { display: true, ticks: { color: '#9aa8bf' }, title: { display: true, text: 'Time', color: '#9aa8bf' }, grid: { color: 'rgba(148,163,184,0.15)' } },
+            y: { display: true, ticks: { color: '#9aa8bf' }, title: { display: true, text: (unitA && unitB && unitA === unitB) ? ('Value (' + unitA + ')') : 'Value', color: '#9aa8bf' }, grid: { color: 'rgba(148,163,184,0.15)' } }
+          }
+        }
+      });
+    }
+    var metricUnits = {{ metric_units | tojson }};
+    buildLineChart('healthChart', {{ health_points | tojson }}, '#a3e635', 'Health', 'score');
+    buildLineChart('cpuChart', {{ cpu_points | tojson }}, '#60a5fa', 'CPU', '%');
+    buildLineChart('memChart', {{ mem_points | tojson }}, '#34d399', 'Memory', '%');
+    buildLineChart('loadChart', {{ load_points | tojson }}, '#f59e0b', 'Load', 'load');
+    buildLineChart('diskChart', {{ disk_points | tojson }}, '#f97316', 'Disk', '%');
+    buildLineChart('netChart', {{ net_rate_points | tojson }}, '#22d3ee', 'Network Throughput', 'B/s');
+    buildLineChart('procChart', {{ proc_points | tojson }}, '#c084fc', 'Running Processes', 'count');
+    buildLineChart('collectChart', {{ collect_points | tojson }}, '#f43f5e', 'Collection Duration', 'ms');
+    buildLineChart('fdChart', {{ fd_points | tojson }}, '#fb7185', 'FD Utilization', '%');
+    buildLineChart('tempChart', {{ temp_points | tojson }}, '#ef4444', 'CPU Temperature', 'C');
+    buildLineChart('swapChart', {{ swap_points | tojson }}, '#14b8a6', 'Swap', '%');
+    buildLineChart('dockerChart', {{ docker_points | tojson }}, '#8b5cf6', 'Docker Containers', 'count');
+    buildDualChart(
+      'customChart',
+      {{ custom_points | tojson }},
+      {{ custom_points_2 | tojson }},
+      '{{ custom_metric }}',
+      '{{ custom_metric_2 }}',
+      metricUnits['{{ custom_metric }}'] || '',
+      metricUnits['{{ custom_metric_2 }}'] || ''
+    );
+
+    document.querySelectorAll('.clickable-card').forEach(function(card) {
+      card.addEventListener('click', function(ev) {
+        var href = card.getAttribute('data-href');
+        if (!href) return;
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,input,select,textarea,label,form')) return;
+        window.location.href = href;
+      });
+    });
+  </script>
+</body>
+</html>

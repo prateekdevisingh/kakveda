@@ -1,0 +1,230 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Observability Detail</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    .wrap { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 8px; }
+    thead th { background: rgba(0,0,0,0.3); padding: 10px 12px; font-size: 0.78em; text-transform: uppercase; color: var(--muted); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(36,48,74,0.5); font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content: space-between;">
+      <div class="row">
+        <a class="btn secondary" href="/observability?agent_id={{ selected_agent }}&app_id={{ selected_app }}">Back to Observability</a>
+        <span class="pill">Observability Detail</span>
+        <span class="small">{{ role }} - {{ email }}</span>
+      </div>
+      <div class="small">Rows: {{ rows|length }}</div>
+    </div>
+
+    <div class="card">
+      <form method="get" action="/observability/detail" class="row">
+        <label class="small" for="agent_id">Agent</label>
+        <select name="agent_id" id="agent_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (agent_choices or []) %}
+            <option value="{{ a }}" {% if selected_agent == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <label class="small" for="app_id">App</label>
+        <select name="app_id" id="app_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (app_choices or []) %}
+            <option value="{{ a }}" {% if selected_app == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <label class="small" for="metric">Metric</label>
+        <select name="metric" id="metric" class="btn secondary" style="padding:6px 10px; min-width:200px;">
+          {% for m in metric_choices %}
+            <option value="{{ m }}" {% if selected_metric == m %}selected{% endif %}>{{ metric_meta[m].label }} ({{ metric_meta[m].unit }})</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit" style="padding:7px 14px;">Apply</button>
+      </form>
+    </div>
+
+    {% if latest %}
+    <div class="card">
+      <div class="small">
+        Metric: <strong>{{ metric_meta[selected_metric].label }}</strong> ({{ metric_meta[selected_metric].unit }}) |
+        Agent: <strong>{{ latest.agent_id }}</strong> |
+        App: <strong>{{ latest.app_id }}</strong>
+      </div>
+      <canvas id="metricChart" height="120"></canvas>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Raw Series (Latest 100)</h3>
+      <table>
+        <thead><tr><th>Timestamp</th><th>Agent</th><th>App</th><th>{{ metric_meta[selected_metric].label }} ({{ metric_meta[selected_metric].unit }})</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.ts }}</td>
+            <td><span class="pill">{{ r.agent_id }}</span></td>
+            <td>{{ r.app_id }}</td>
+            <td>{{ r[selected_metric]|round(3) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="small">No rows for selected filters.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="small">No observability rows found for selected filters.</div>
+    </div>
+    {% endif %}
+  </div>
+  <div id="hoverTip" style="position:fixed;pointer-events:none;z-index:50;background:rgba(10,14,24,0.96);color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);border-radius:6px;padding:4px 8px;font-size:12px;display:none;"></div>
+
+  <script>
+    function bindFallbackTooltip(elId, points, unit) {
+      var canvas = document.getElementById(elId);
+      var tip = document.getElementById('hoverTip');
+      if (!canvas || !tip || !points || !points.length) return;
+      var padLeft = 42, padRight = 10, padTop = 10, padBottom = 20;
+      canvas.addEventListener('mousemove', function (ev) {
+        var rect = canvas.getBoundingClientRect();
+        var x = ev.clientX - rect.left;
+        var y = ev.clientY - rect.top;
+        if (x < padLeft || x > rect.width - padRight || y < padTop || y > rect.height - padBottom) {
+          tip.style.display = 'none';
+          return;
+        }
+        var idx = Math.max(0, Math.min(points.length - 1, Math.round(((x - padLeft) / Math.max(rect.width - padLeft - padRight, 1)) * (points.length - 1))));
+        var p = points[idx] || {};
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY + 12) + 'px';
+        tip.textContent = (p.ts || '') + ' | ' + Number(p.value || 0).toFixed(3) + (unit ? (' ' + unit) : '');
+      });
+      canvas.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+    }
+
+    function drawFallbackLine(elId, points, color, label, unit) {
+      var canvas = document.getElementById(elId);
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      var w = canvas.clientWidth || 900;
+      var h = canvas.height || 120;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      if (!points || !points.length) {
+        ctx.fillStyle = '#9aa8bf';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('No data', 12, 20);
+        return;
+      }
+      var vals = points.map(function (p) { var v = Number(p.value); return Number.isFinite(v) ? v : 0; });
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+      if (min === max) max = min + 1;
+      var padLeft = 42, padBottom = 20, padTop = 10, padRight = 10;
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(w - padRight, h - padBottom);
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(padLeft, padTop);
+      ctx.stroke();
+      ctx.fillStyle = '#9aa8bf';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Time', w - 34, h - 4);
+      ctx.fillText(String(Number(max).toFixed(1)), 4, padTop + 4);
+      ctx.fillText(String(Number(min).toFixed(1)), 4, h - padBottom + 4);
+      ctx.fillText(label + (unit ? (' (' + unit + ')') : ''), 4, h / 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (var i = 0; i < vals.length; i++) {
+        var x = padLeft + ((w - padLeft - padRight) * i) / Math.max(vals.length - 1, 1);
+        var y = h - padBottom - ((h - padTop - padBottom) * (vals[i] - min)) / (max - min);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      bindFallbackTooltip(elId, points, unit);
+    }
+
+    function buildLineChart(elId, points, color, label, unit) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      if (!points || !points.length) {
+        drawFallbackLine(elId, [], color, label, unit);
+        return;
+      }
+      if (!window.Chart) {
+        drawFallbackLine(elId, points, color, label, unit);
+        return;
+      }
+      new Chart(el, {
+        type: 'line',
+        data: {
+          labels: points.map(function(p){ return p.ts || ''; }),
+          datasets: [{
+            label: label + ' (' + unit + ')',
+            data: points.map(function(p){ return p.value || 0; }),
+            borderColor: color,
+            backgroundColor: color + '33',
+            tension: 0.25,
+            fill: true,
+            pointRadius: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              callbacks: {
+                label: function(context) {
+                  var v = context.parsed && typeof context.parsed.y === 'number' ? context.parsed.y : 0;
+                  return label + ': ' + Number(v).toFixed(3) + ' ' + unit;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              ticks: { color: '#94a3b8', maxTicksLimit: 8 },
+              title: { display: true, text: 'Time', color: '#94a3b8' },
+              grid: { color: 'rgba(51,65,85,0.35)' }
+            },
+            y: {
+              display: true,
+              ticks: { color: '#94a3b8' },
+              title: { display: true, text: label + ' (' + unit + ')', color: '#94a3b8' },
+              grid: { color: 'rgba(51,65,85,0.35)' }
+            }
+          }
+        }
+      });
+    }
+    buildLineChart(
+      'metricChart',
+      {{ metric_points | tojson }},
+      '{{ metric_meta[selected_metric].color }}',
+      '{{ metric_meta[selected_metric].label }}',
+      '{{ metric_meta[selected_metric].unit }}'
+    );
+  </script>
+</body>
+</html>

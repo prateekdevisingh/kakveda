@@ -1,0 +1,619 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Observability</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 16px 24px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .brand { display: flex; gap: 12px; align-items: center; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .wrap { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 14px; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+    .card a { color: inherit; text-decoration: none; }
+    .clickable-card { cursor: pointer; }
+    .value { font-size: 1.5em; font-weight: 700; color: #60a5fa; margin-top: 4px; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 10px; }
+    thead th { background: rgba(0,0,0,0.3); padding: 10px 12px; font-size: 0.78em; text-transform: uppercase; color: var(--muted); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(36,48,74,0.5); font-size: 0.9em; }
+    @media (max-width: 1200px) { .grid { grid-template-columns: 1fr 1fr 1fr; } .charts { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } .wrap { padding: 14px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="/static/logo.svg" alt="Kakveda" style="height: 36px;" />
+      <span class="small">|</span>
+      <span class="small">{{ role }} - {{ email }}</span>
+      <span class="pill">Observability</span>
+    </div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/infra">Infra</a>
+      <a href="/observability" class="active">Observability</a>
+      <a href="/agents">Agents</a>
+      <a href="/runs">Runs</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if message %}
+    <div class="card" style="border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.12); color: #bbf7d0;">
+      {{ message }}
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="card" style="border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); color: #fecaca;">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <form method="get" action="/observability" class="row">
+        <label class="small" for="agent_id">Agent</label>
+        <select name="agent_id" id="agent_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (agent_choices or []) %}
+            <option value="{{ a }}" {% if selected_agent == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <label class="small" for="app_id">App</label>
+        <select name="app_id" id="app_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (app_choices or []) %}
+            <option value="{{ a }}" {% if selected_app == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <label class="small" for="app_group">App Group</label>
+        <select name="app_group" id="app_group" class="btn secondary" style="padding:6px 10px;">
+          <option value="all" {% if selected_app_group == 'all' %}selected{% endif %}>All Apps</option>
+          <option value="k8s_only" {% if selected_app_group == 'k8s_only' %}selected{% endif %}>k8s: mapped only</option>
+          <option value="non_k8s" {% if selected_app_group == 'non_k8s' %}selected{% endif %}>Non-k8s only</option>
+        </select>
+        <label class="small" for="namespace">Namespace</label>
+        <select name="namespace" id="namespace" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All namespaces</option>
+          {% for ns in (namespace_choices or []) %}
+            <option value="{{ ns }}" {% if selected_namespace == ns %}selected{% endif %}>{{ ns }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit" style="padding:7px 14px;">Apply</button>
+      </form>
+      <form method="post" action="/observability/toggle" class="row" style="margin-top:10px;">
+        {{ csrf_input(request) | safe }}
+        <input type="hidden" name="agent_name" value="{{ selected_agent }}" />
+        <input type="hidden" name="app_id" value="{{ selected_app }}" />
+        <input type="hidden" name="app_group" value="{{ selected_app_group }}" />
+        <input type="hidden" name="namespace" value="{{ selected_namespace }}" />
+        <label class="small" for="observability_topic">Topic</label>
+        <input id="observability_topic" type="text" name="observability_topic" value="{{ (selected_agent_config.observability_topic if selected_agent_config else 'observability.metrics') or 'observability.metrics' }}" class="btn secondary" style="padding:6px 8px; min-width:180px;" />
+        <label class="small" for="observability_window">Window</label>
+        <input id="observability_window" type="number" min="10" step="1" name="observability_window" value="{{ (selected_agent_config.observability_window if selected_agent_config else 120) or 120 }}" class="btn secondary" style="padding:6px 8px; width:90px;" />
+        <label class="small" for="k8s_auto_map_enabled">k8s auto-map</label>
+        <select id="k8s_auto_map_enabled" name="k8s_auto_map_enabled" class="btn secondary" style="padding:6px 8px;">
+          <option value="true" {% if (selected_agent_config.k8s_auto_map_enabled if selected_agent_config else True) %}selected{% endif %}>true</option>
+          <option value="false" {% if not (selected_agent_config.k8s_auto_map_enabled if selected_agent_config else True) %}selected{% endif %}>false</option>
+        </select>
+        <label class="small" for="k8s_auto_map_max_apps">k8s max apps</label>
+        <input id="k8s_auto_map_max_apps" type="number" min="1" step="1" name="k8s_auto_map_max_apps" value="{{ (selected_agent_config.k8s_auto_map_max_apps if selected_agent_config else 50) or 50 }}" class="btn secondary" style="padding:6px 8px; width:90px;" />
+        <label class="small" for="k8s_auto_map_prefix">k8s prefix</label>
+        <input id="k8s_auto_map_prefix" type="text" name="k8s_auto_map_prefix" value="{{ (selected_agent_config.k8s_auto_map_prefix if selected_agent_config else 'k8s') or 'k8s' }}" class="btn secondary" style="padding:6px 8px; width:90px;" />
+        <button class="btn secondary" type="submit" name="enabled" value="true" style="padding:7px 12px;">Enable Observability</button>
+        <button class="btn secondary" type="submit" name="enabled" value="false" style="padding:7px 12px;">Disable Observability</button>
+        <span class="small">
+          target agent=<strong>{{ selected_agent or 'none selected' }}</strong>
+          {% if selected_agent_meta %}
+            ({{ selected_agent_meta.base_url }})
+          {% endif %}
+        </span>
+      </form>
+    </div>
+
+    {% if filter_message %}
+    <div class="card" style="border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.12); color: #fde68a;">
+      {{ filter_message }}
+    </div>
+    {% endif %}
+
+    <div class="card" style="border-color: rgba(59,130,246,0.45);">
+      <h3 style="margin:0 0 8px;">Diagnostics</h3>
+      <div class="small">
+        status=<strong>{{ phase0_diagnostics.status }}</strong>,
+        rows=<strong>{{ phase0_diagnostics.observability_rows }}</strong>,
+        latest_age_sec=<strong>{{ phase0_diagnostics.latest_sample_age_seconds if phase0_diagnostics.latest_sample_age_seconds is not none else 'n/a' }}</strong>,
+        traces_24h=<strong>{{ phase0_diagnostics.traces_24h }}</strong>,
+        k8s_enabled=<strong>{{ phase0_diagnostics.k8s_enabled }}</strong>
+      </div>
+      <div class="small" style="margin-top:4px;">
+        chart_points:
+        latency=<strong>{{ phase0_diagnostics.chart_points.latency }}</strong>,
+        traffic=<strong>{{ phase0_diagnostics.chart_points.traffic }}</strong>,
+        errors=<strong>{{ phase0_diagnostics.chart_points.errors }}</strong>,
+        cpu=<strong>{{ phase0_diagnostics.chart_points.cpu_saturation }}</strong>,
+        memory=<strong>{{ phase0_diagnostics.chart_points.memory_saturation }}</strong>,
+        disk=<strong>{{ phase0_diagnostics.chart_points.disk_saturation }}</strong>
+      </div>
+      <div class="small" style="margin-top:4px;">
+        k8s_inventory:
+        nodes=<strong>{{ phase0_diagnostics.k8s_inventory.nodes }}</strong>,
+        pods=<strong>{{ phase0_diagnostics.k8s_inventory.pods_total }}</strong>,
+        deployments=<strong>{{ phase0_diagnostics.k8s_inventory.deployments }}</strong>,
+        configmaps=<strong>{{ phase0_diagnostics.k8s_inventory.configmaps }}</strong>,
+        secrets=<strong>{{ phase0_diagnostics.k8s_inventory.secrets }}</strong>,
+        services=<strong>{{ phase0_diagnostics.k8s_inventory.services }}</strong>
+      </div>
+      <div class="small" style="margin-top:4px;">
+        missing_signals=<strong>{{ (phase0_diagnostics.missing_signals or []) | join(', ') if (phase0_diagnostics.missing_signals or []) else 'none' }}</strong>
+      </div>
+      <div class="small" style="margin-top:6px;">
+        API:
+        <code>/api/observability/diagnostics?agent_id={{ selected_agent }}&app_id={{ selected_app }}</code>
+      </div>
+    </div>
+
+    {% if latest or k8s_info.enabled %}
+    <div class="grid">
+      <div class="card clickable-card" data-href="/observability/detail?metric=latency_current&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=latency_current&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Latency p95 (ms)</div><div class="value">{{ four_golden.latency_p95|round(2) }}</div></a></div>
+      <div class="card clickable-card" data-href="/observability/detail?metric=traffic_rps&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=traffic_rps&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Traffic avg (RPS)</div><div class="value">{{ four_golden.traffic_rps_avg|round(2) }}</div></a></div>
+      <div class="card clickable-card" data-href="/observability/detail?metric=error_rate_percent&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=error_rate_percent&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Error rate avg (%)</div><div class="value">{{ four_golden.error_rate_avg|round(2) }}</div></a></div>
+      <div class="card clickable-card" data-href="/observability/detail?metric=cpu_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=cpu_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">CPU saturation avg (%)</div><div class="value">{{ four_golden.cpu_sat_avg|round(2) }}</div></a></div>
+      <div class="card clickable-card" data-href="/observability/detail?metric=memory_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=memory_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Memory saturation avg (%)</div><div class="value">{{ four_golden.memory_sat_avg|round(2) }}</div></a></div>
+      <div class="card clickable-card" data-href="/observability/detail?metric=disk_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=disk_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Disk saturation avg (%)</div><div class="value">{{ four_golden.disk_sat_avg|round(2) }}</div></a></div>
+    </div>
+
+    <div class="charts">
+      <div class="card"><div class="small">Latency (ms)</div><canvas id="latencyChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Traffic (RPS)</div><canvas id="trafficChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Errors (%)</div><canvas id="errorsChart" height="110"></canvas></div>
+    </div>
+    <div class="charts">
+      <div class="card"><div class="small">Saturation CPU (%)</div><canvas id="satCpuChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Saturation Memory (%)</div><canvas id="satMemChart" height="110"></canvas></div>
+      <div class="card"><div class="small">Saturation Disk (%)</div><canvas id="satDiskChart" height="110"></canvas></div>
+    </div>
+    <div class="row" style="margin: 6px 0 14px;">
+      <a class="btn secondary" href="/observability/detail?metric=latency_current&agent_id={{ selected_agent }}&app_id={{ selected_app }}">Latency Detail</a>
+      <a class="btn secondary" href="/observability/detail?metric=traffic_rps&agent_id={{ selected_agent }}&app_id={{ selected_app }}">Traffic Detail</a>
+      <a class="btn secondary" href="/observability/detail?metric=error_rate_percent&agent_id={{ selected_agent }}&app_id={{ selected_app }}">Error Detail</a>
+      <a class="btn secondary" href="/observability/detail?metric=cpu_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}">CPU Detail</a>
+      <a class="btn secondary" href="/observability/detail?metric=memory_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}">Memory Detail</a>
+      <a class="btn secondary" href="/observability/detail?metric=disk_saturation&agent_id={{ selected_agent }}&app_id={{ selected_app }}">Disk Detail</a>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Three Pillars Summary</h3>
+      <div class="small">Metrics: latency/traffic/errors/saturation from netra-observability events.</div>
+      <div class="small">Logs: collector error count and latest collector error message.</div>
+      <div class="small">Traces: last 24h traces from `TraceRun` (excluding infra/observability events).</div>
+      <div class="small" style="margin-top:8px;">
+        Traces 24h count=<strong>{{ traces_summary.count_24h }}</strong>,
+        Errors=<strong>{{ traces_summary.error_count_24h }}</strong>,
+        p95 duration ms=<strong>{{ traces_summary.p95_duration_ms|round(2) }}</strong>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">SLO + Error Budget</h3>
+      <div class="small">
+        target_availability=<strong>{{ phase2_slo.target_availability_percent|round(3) }}%</strong>,
+        allowed_error_rate=<strong>{{ phase2_slo.allowed_error_rate_percent|round(3) }}%</strong>,
+        observed_error_rate=<strong>{{ phase2_slo.observed_error_rate_percent|round(3) }}%</strong>,
+        burn_rate=<strong>{{ phase2_slo.burn_rate|round(2) }}x</strong>,
+        budget_remaining=<strong>{{ phase2_slo.error_budget_remaining_percent|round(2) }}%</strong>,
+        status=<strong>{{ phase2_slo.status }}</strong>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Inferred Service Map (Top by RPS)</h3>
+      <table>
+        <thead><tr><th>App</th><th>Namespace</th><th>Agent</th><th>Samples</th><th>Latency Avg (ms)</th><th>RPS Avg</th><th>Error% Avg</th><th>CPU% Avg</th><th>Memory% Avg</th></tr></thead>
+        <tbody>
+          {% for s in service_map_rows %}
+          <tr>
+            <td><span class="pill">{{ s.app_id }}</span></td>
+            <td>{{ s.namespace or '-' }}</td>
+            <td>{{ s.agent_id }}</td>
+            <td>{{ s.samples }}</td>
+            <td>{{ s.latency_avg|round(2) }}</td>
+            <td>{{ s.rps_avg|round(3) }}</td>
+            <td>{{ s.error_avg|round(3) }}</td>
+            <td>{{ s.cpu_avg|round(2) }}</td>
+            <td>{{ s.memory_avg|round(2) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="small">No service map rows available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Synthetic Checks</h3>
+      <table>
+        <thead><tr><th>Check</th><th>Status</th><th>Value</th><th>Note</th></tr></thead>
+        <tbody>
+          {% for c in synthetic_checks %}
+          <tr>
+            <td><span class="pill">{{ c.check }}</span></td>
+            <td>
+              <strong {% if c.status == 'fail' %}style="color:#ef4444;"{% elif c.status == 'warn' %}style="color:#f59e0b;"{% else %}style="color:#22c55e;"{% endif %}>
+                {{ c.status }}
+              </strong>
+            </td>
+            <td>{{ c.value }} {{ c.unit }}</td>
+            <td>{{ c.note }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="small">No synthetic checks.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Incident Timeline</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Severity</th><th>Agent</th><th>App</th><th>Reason</th></tr></thead>
+        <tbody>
+          {% for i in incident_rows %}
+          <tr>
+            <td>{{ i.ts }}</td>
+            <td>
+              <strong {% if i.severity == 'critical' %}style="color:#ef4444;"{% else %}style="color:#f59e0b;"{% endif %}>{{ i.severity }}</strong>
+            </td>
+            <td>{{ i.agent_id }}</td>
+            <td>{{ i.app_id }}</td>
+            <td>{{ i.reason }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No incidents in current filtered window.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Forecast (Next 6 steps)</h3>
+        <table>
+          <thead><tr><th>Metric</th><th>Step1</th><th>Step2</th><th>Step3</th><th>Step4</th><th>Step5</th><th>Step6</th></tr></thead>
+          <tbody>
+            {% for m, vals in forecast_rows.items() %}
+            <tr>
+              <td><span class="pill">{{ m }}</span></td>
+              {% for v in vals %}
+              <td>{{ v.value|round(2) }}</td>
+              {% endfor %}
+              {% if vals|length < 6 %}
+                {% for _ in range(6 - (vals|length)) %}
+                <td>-</td>
+                {% endfor %}
+              {% endif %}
+            </tr>
+            {% else %}
+            <tr><td colspan="7" class="small">No forecast data.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Metric Correlation</h3>
+        <table>
+          <thead><tr><th>Pair</th><th>Correlation</th></tr></thead>
+          <tbody>
+            {% for c in correlation_rows %}
+            <tr>
+              <td>{{ c.pair }}</td>
+              <td>{{ c.value|round(3) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="2" class="small">No correlation data.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Forecast Notes</h3>
+        <div class="small">Forecast is linear from recent samples (lightweight capacity hint).</div>
+        <div class="small">Correlation is Pearson-style on current filtered window.</div>
+        <div class="small">Use this with SLO burn-rate for incident triage.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">k8s Namespace Aggregate</h3>
+      <table>
+        <thead><tr><th>Namespace</th><th>Samples</th><th>Latency Avg (ms)</th><th>RPS Avg</th><th>Error% Avg</th></tr></thead>
+        <tbody>
+          {% for n in namespace_rows %}
+          <tr>
+            <td><span class="pill">{{ n.namespace }}</span></td>
+            <td>{{ n.samples }}</td>
+            <td>{{ n.latency_avg|round(2) }}</td>
+            <td>{{ n.rps_avg|round(3) }}</td>
+            <td>{{ n.error_avg|round(2) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No k8s namespace data available for current filters.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Recent Observability Samples</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Agent</th><th>App</th><th>Latency</th><th>RPS</th><th>Error%</th><th>CPU%</th><th>Mem%</th><th>Disk%</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.ts }}</td>
+            <td><span class="pill">{{ r.agent_id }}</span></td>
+            <td>{{ r.app_id }}</td>
+            <td>{{ r.latency_current|round(2) }}</td>
+            <td>{{ r.traffic_rps|round(3) }}</td>
+            <td>{{ r.error_rate_percent|round(2) }}</td>
+            <td>{{ r.cpu_saturation|round(2) }}</td>
+            <td>{{ r.memory_saturation|round(2) }}</td>
+            <td>{{ r.disk_saturation|round(2) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="small">No observability samples found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="small">k8s Nodes</div><div class="value">{{ k8s_info.node_count }}</div></div>
+      <div class="card"><div class="small">k8s Pods (running/total)</div><div class="value">{{ k8s_info.pod_count_running }}/{{ k8s_info.pod_count_total }}</div></div>
+      <div class="card"><div class="small">k8s Deployments</div><div class="value">{{ k8s_info.deployment_count }}</div></div>
+      <div class="card"><div class="small">k8s ConfigMaps / Secrets</div><div class="value">{{ k8s_info.configmap_count }}/{{ k8s_info.secret_count }}</div></div>
+    </div>
+    <div class="card">
+      <div class="small">
+        k8s enabled=<strong>{{ k8s_info.enabled }}</strong>
+        {% if not k8s_info.enabled and k8s_info.reason %}| reason=<strong>{{ k8s_info.reason }}</strong>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">k8s Auto-Mapped Apps</h3>
+      <table>
+        <thead><tr><th>App ID</th><th>Namespace</th><th>App</th><th>Samples</th></tr></thead>
+        <tbody>
+          {% for a in k8s_app_rows %}
+          <tr><td><span class="pill">{{ a.app_id }}</span></td><td>{{ a.namespace }}</td><td>{{ a.app_name }}</td><td>{{ a.samples }}</td></tr>
+          {% else %}
+          <tr><td colspan="4" class="small">No k8s mapped apps observed yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s Nodes</h3>
+        <table>
+          <thead><tr><th>Name</th><th>Ready</th><th>CPU</th><th>Memory</th><th>Pods</th></tr></thead>
+          <tbody>
+            {% for n in k8s_info.nodes %}
+            <tr><td>{{ n.node_name }}</td><td>{{ n.node_ready }}</td><td>{{ n.node_cpu_capacity }}</td><td>{{ n.node_memory_capacity }}</td><td>{{ n.node_pod_capacity }}</td></tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No node data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s Deployments</h3>
+        <table>
+          <thead><tr><th>Namespace</th><th>Name</th><th>Desired</th><th>Ready</th><th>Available</th></tr></thead>
+          <tbody>
+            {% for d in k8s_info.deployments %}
+            <tr><td>{{ d.namespace }}</td><td>{{ d.deployment_name }}</td><td>{{ d.replicas_desired }}</td><td>{{ d.replicas_ready }}</td><td>{{ d.replicas_available }}</td></tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No deployment data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s Services</h3>
+        <table>
+          <thead><tr><th>Namespace</th><th>Name</th><th>Type</th><th>ClusterIP</th></tr></thead>
+          <tbody>
+            {% for s in k8s_info.services %}
+            <tr><td>{{ s.namespace }}</td><td>{{ s.service_name }}</td><td>{{ s.service_type }}</td><td>{{ s.cluster_ip }}</td></tr>
+            {% else %}
+            <tr><td colspan="4" class="small">No service data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s ConfigMaps</h3>
+        <table>
+          <thead><tr><th>Namespace</th><th>Name</th><th>Keys</th></tr></thead>
+          <tbody>
+            {% for c in k8s_info.configmaps %}
+            <tr><td>{{ c.namespace }}</td><td>{{ c.configmap_name }}</td><td>{{ c.key_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="3" class="small">No configmap data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s Secrets (metadata only)</h3>
+        <table>
+          <thead><tr><th>Namespace</th><th>Name</th><th>Type</th><th>Keys</th></tr></thead>
+          <tbody>
+            {% for s in k8s_info.secrets %}
+            <tr><td>{{ s.namespace }}</td><td>{{ s.secret_name }}</td><td>{{ s.secret_type }}</td><td>{{ s.key_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="4" class="small">No secret metadata</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">k8s Pods</h3>
+        <table>
+          <thead><tr><th>Namespace</th><th>Pod</th><th>Phase</th><th>Node</th><th>Restarts</th></tr></thead>
+          <tbody>
+            {% for p in k8s_info.pods %}
+            <tr><td>{{ p.namespace }}</td><td>{{ p.pod_name }}</td><td>{{ p.pod_phase }}</td><td>{{ p.node_name }}</td><td>{{ p.container_restart_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No pod data</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="small">No observability data yet. Ensure `kakveda-netra` has observability enabled.</div>
+    </div>
+    {% endif %}
+  </div>
+  <div id="hoverTip" style="position:fixed;pointer-events:none;z-index:50;background:rgba(10,14,24,0.96);color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);border-radius:6px;padding:4px 8px;font-size:12px;display:none;"></div>
+
+  <script>
+    function bindFallbackTooltip(elId, points) {
+      var canvas = document.getElementById(elId);
+      var tip = document.getElementById('hoverTip');
+      if (!canvas || !tip || !points || !points.length) return;
+      var padLeft = 28, padRight = 8, padTop = 8, padBottom = 18;
+      function onMove(evt) {
+        var rect = canvas.getBoundingClientRect();
+        var x = evt.clientX - rect.left;
+        var y = evt.clientY - rect.top;
+        if (x < padLeft || x > rect.width - padRight || y < padTop || y > rect.height - padBottom) {
+          tip.style.display = 'none';
+          return;
+        }
+        var idx = Math.round(((x - padLeft) / Math.max(rect.width - padLeft - padRight, 1)) * Math.max(points.length - 1, 0));
+        idx = Math.max(0, Math.min(points.length - 1, idx));
+        var p = points[idx] || {};
+        var val = Number(p.value || 0).toFixed(2);
+        tip.textContent = (p.ts || '') + ' | ' + val;
+        tip.style.display = 'block';
+        tip.style.left = (evt.clientX + 12) + 'px';
+        tip.style.top = (evt.clientY + 12) + 'px';
+      }
+      canvas.addEventListener('mousemove', onMove);
+      canvas.addEventListener('mouseleave', function(){ tip.style.display = 'none'; });
+    }
+
+    function drawFallbackLine(elId, points, color, label, unit) {
+      var canvas = document.getElementById(elId);
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      var w = canvas.width;
+      var h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      var vals = (points || []).map(function(p){ return Number(p.value || 0); });
+      if (!vals.length) vals = [0];
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+      if (max === min) { max = min + 1; }
+      var padLeft = 28, padRight = 8, padTop = 8, padBottom = 18;
+      ctx.strokeStyle = 'rgba(148,163,184,0.25)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, padTop);
+      ctx.lineTo(padLeft, h - padBottom);
+      ctx.lineTo(w - padRight, h - padBottom);
+      ctx.stroke();
+      ctx.fillStyle = '#9aa8bf';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Time', w - 34, h - 4);
+      ctx.fillText(String(Number(max).toFixed(1)), 4, padTop + 4);
+      ctx.fillText(String(Number(min).toFixed(1)), 4, h - padBottom + 4);
+      if (label) ctx.fillText(label + (unit ? (' (' + unit + ')') : ''), 4, h / 2);
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (var i = 0; i < vals.length; i++) {
+        var x = padLeft + ((w - padLeft - padRight) * i) / Math.max(vals.length - 1, 1);
+        var y = h - padBottom - ((h - padTop - padBottom) * (vals[i] - min)) / (max - min);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      bindFallbackTooltip(elId, points);
+    }
+
+    function buildLineChart(elId, points, color, label, unit) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      if (!points || !points.length) {
+        drawFallbackLine(elId, [], color, label, unit);
+        return;
+      }
+      if (!window.Chart) {
+        drawFallbackLine(elId, points, color, label, unit);
+        return;
+      }
+      new Chart(el, {
+        type: 'line',
+        data: { labels: points.map(p => p.ts || ''), datasets: [{ label: label + (unit ? (' (' + unit + ')') : ''), data: points.map(p => p.value || 0), borderColor: color, backgroundColor: color + '33', tension: 0.25, fill: true, pointRadius: 0 }]},
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              callbacks: {
+                label: function(context) {
+                  var v = context.parsed && typeof context.parsed.y === 'number' ? context.parsed.y : 0;
+                  return label + ': ' + Number(v).toFixed(3) + (unit ? (' ' + unit) : '');
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, title: { display: true, text: 'Time', color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.35)' } },
+            y: { ticks: { color: '#94a3b8' }, title: { display: true, text: label + (unit ? (' (' + unit + ')') : ''), color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.35)' } }
+          }
+        }
+      });
+    }
+    buildLineChart('latencyChart', {{ latency_points | tojson }}, '#60a5fa', 'Latency', 'ms');
+    buildLineChart('trafficChart', {{ traffic_points | tojson }}, '#22c55e', 'Traffic', 'rps');
+    buildLineChart('errorsChart', {{ errors_points | tojson }}, '#ef4444', 'Error Rate', '%');
+    buildLineChart('satCpuChart', {{ sat_cpu_points | tojson }}, '#f59e0b', 'CPU Saturation', '%');
+    buildLineChart('satMemChart', {{ sat_mem_points | tojson }}, '#8b5cf6', 'Memory Saturation', '%');
+    buildLineChart('satDiskChart', {{ sat_disk_points | tojson }}, '#06b6d4', 'Disk Saturation', '%');
+
+    document.querySelectorAll('.clickable-card').forEach(function(card) {
+      card.addEventListener('click', function(ev) {
+        var href = card.getAttribute('data-href');
+        if (!href) return;
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,input,select,textarea,label,form')) return;
+        window.location.href = href;
+      });
+    });
+  </script>
+</body>
+</html>

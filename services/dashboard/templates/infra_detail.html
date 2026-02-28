@@ -1,0 +1,285 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Infra Detail</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    .wrap { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .pill { display: inline-block; padding: 4px 12px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.88em; font-weight: 500; }
+    .danger { color: #fecaca; font-weight: 700; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+    table { border-collapse: separate; border-spacing: 0; width: 100%; margin-top: 8px; }
+    thead th { background: rgba(0,0,0,0.3); padding: 10px 12px; font-size: 0.78em; text-transform: uppercase; color: var(--muted); }
+    tbody td { padding: 10px 12px; border-bottom: 1px solid rgba(36,48,74,0.5); font-size: 0.9em; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+    @media (max-width: 1000px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row" style="justify-content: space-between;">
+      <div class="row">
+        <a class="btn secondary" href="/infra">Back to Infra</a>
+        <a class="btn secondary" href="/observability">Observability</a>
+        <span class="pill">Infra Detail</span>
+        <span class="small">{{ role }} - {{ email }}</span>
+      </div>
+      <div class="small">Snapshots: {{ snapshot_count }}</div>
+    </div>
+
+    <div class="card">
+      <form method="get" action="/infra/detail" class="row">
+        <label class="small" for="agent_id">Agent</label>
+        <select name="agent_id" id="agent_id" class="btn secondary" style="padding:6px 10px;">
+          <option value="">All</option>
+          {% for a in (agent_choices or []) %}
+            <option value="{{ a }}" {% if selected_agent == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+        <input type="text" name="q" value="{{ q }}" placeholder="query: agent/app/hostname" class="btn secondary" style="padding:6px 10px; min-width:220px;" />
+        <select name="metric" class="btn secondary" style="padding:6px 8px; min-width:220px;">
+          {% for m in metric_choices %}
+            <option value="{{ m }}" {% if selected_metric == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn" type="submit" style="padding:7px 14px;">Apply</button>
+      </form>
+      {% if filter_message %}
+      <div class="small danger" style="margin-top:8px;">Filter info: {{ filter_message }}</div>
+      {% endif %}
+    </div>
+
+    {% if latest %}
+    <div class="card">
+      <div class="small">Metric Trend: <strong>{{ selected_metric }}</strong> ({{ selected_metric_unit }})</div>
+      <canvas id="metricChart" height="110"></canvas>
+    </div>
+
+    <div class="grid3">
+      <div class="card">
+        <div class="small">System</div>
+        <div class="small">System ID: <strong>{{ latest.system_id }}</strong></div>
+        <div class="small">Host: <strong>{{ latest.hostname or 'unknown' }}</strong></div>
+        <div class="small">App: <strong>{{ latest.app_id }}</strong></div>
+        <div class="small">Timestamp: <strong>{{ latest.ts }}</strong></div>
+      </div>
+      <div class="card">
+        <div class="small">Key Values</div>
+        <div class="small">CPU: <strong>{{ latest.cpu_percent_total|round(2) }}%</strong></div>
+        <div class="small">Memory: <strong>{{ latest.memory_percent|round(2) }}%</strong></div>
+        <div class="small">Load 1m: <strong>{{ latest.load_average_1m|round(2) }}</strong></div>
+        <div class="small">Docker Count: <strong>{{ latest.docker_count }}</strong></div>
+      </div>
+      <div class="card">
+        <div class="small">Docker Diagnostics</div>
+        <div class="small">socket: <strong>{{ docker_socket_path or 'n/a' }}</strong></div>
+        <div class="small {% if docker_error %}danger{% endif %}">
+          error: <strong>{{ docker_error or 'none' }}</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Docker Containers (Latest Snapshot)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Status</th><th>CPU%</th><th>Mem Usage</th><th>Mem Limit</th><th>Net RX</th><th>Net TX</th><th>Blk Read</th><th>Blk Write</th><th>Restarts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in latest_docker %}
+          <tr>
+            <td>{{ c.container_name }}</td>
+            <td>{{ c.container_status }}</td>
+            <td>{{ c.container_cpu_percent|round(2) }}</td>
+            <td>{{ c.container_memory_usage|int }}</td>
+            <td>{{ c.container_memory_limit|int }}</td>
+            <td>{{ (c.container_net_io or {}).get('rx_bytes', 0)|int }}</td>
+            <td>{{ (c.container_net_io or {}).get('tx_bytes', 0)|int }}</td>
+            <td>{{ (c.container_block_io or {}).get('read_bytes', 0)|int }}</td>
+            <td>{{ (c.container_block_io or {}).get('write_bytes', 0)|int }}</td>
+            <td>{{ c.container_restart_count }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="small">No docker metrics on latest snapshot.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">All Containers Inventory (Latest Per System)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>System ID</th><th>Host</th><th>Container</th><th>Status</th><th>CPU%</th><th>Mem Usage</th><th>Mem Limit</th><th>Net RX</th><th>Net TX</th><th>Blk Read</th><th>Blk Write</th><th>Restarts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in all_containers %}
+          <tr>
+            <td>{{ c.system_id }}</td>
+            <td>{{ c.hostname or '-' }}</td>
+            <td>{{ c.container_name }}</td>
+            <td>{{ c.container_status }}</td>
+            <td>{{ c.container_cpu_percent|round(2) }}</td>
+            <td>{{ c.container_memory_usage|int }}</td>
+            <td>{{ c.container_memory_limit|int }}</td>
+            <td>{{ c.net_rx_bytes|int }}</td>
+            <td>{{ c.net_tx_bytes|int }}</td>
+            <td>{{ c.blk_read_bytes|int }}</td>
+            <td>{{ c.blk_write_bytes|int }}</td>
+            <td>{{ c.container_restart_count }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="12" class="small">No container metrics available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">CPU / Memory / System</h3>
+        <pre>{{ {"cpu": latest_cpu, "memory": latest_memory, "system": latest_system} | tojson(indent=2) }}</pre>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Process / Disk / Network</h3>
+        <pre>{{ {"process": latest_process, "disk": latest_disk, "network": latest_network} | tojson(indent=2) }}</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Latest Infra Raw JSON</h3>
+      <pre>{{ latest_infra_json }}</pre>
+    </div>
+    {% else %}
+    <div class="card">
+      <div class="small">No infra snapshots found for current filters.</div>
+    </div>
+    {% endif %}
+  </div>
+  <div id="hoverTip" style="position:fixed;pointer-events:none;z-index:50;background:rgba(10,14,24,0.96);color:#cbd5e1;border:1px solid rgba(148,163,184,0.35);border-radius:6px;padding:4px 8px;font-size:12px;display:none;"></div>
+
+  <script>
+    function bindFallbackTooltip(elId, points, unit) {
+      var canvas = document.getElementById(elId);
+      var tip = document.getElementById('hoverTip');
+      if (!canvas || !tip || !points || !points.length) return;
+      var padLeft = 42, padRight = 10, padTop = 10, padBottom = 20;
+      canvas.addEventListener('mousemove', function (ev) {
+        var rect = canvas.getBoundingClientRect();
+        var x = ev.clientX - rect.left;
+        var y = ev.clientY - rect.top;
+        if (x < padLeft || x > rect.width - padRight || y < padTop || y > rect.height - padBottom) {
+          tip.style.display = 'none';
+          return;
+        }
+        var idx = Math.max(0, Math.min(points.length - 1, Math.round(((x - padLeft) / Math.max(rect.width - padLeft - padRight, 1)) * (points.length - 1))));
+        var p = points[idx] || {};
+        tip.style.display = 'block';
+        tip.style.left = (ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY + 12) + 'px';
+        tip.textContent = (p.ts || '') + ' | ' + Number(p.value || 0).toFixed(3) + (unit ? (' ' + unit) : '');
+      });
+      canvas.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+    }
+
+    function drawFallbackLine(elId, points, color, label, unit) {
+      var canvas = document.getElementById(elId);
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      var w = canvas.clientWidth || 900;
+      var h = canvas.height || 110;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      if (!points || !points.length) {
+        ctx.fillStyle = '#9aa8bf';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('No data', 12, 20);
+        return;
+      }
+      var vals = points.map(function (p) { var v = Number(p.value); return Number.isFinite(v) ? v : 0; });
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+      if (min === max) max = min + 1;
+      var padLeft = 42, padBottom = 20, padTop = 10, padRight = 10;
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(w - padRight, h - padBottom);
+      ctx.moveTo(padLeft, h - padBottom);
+      ctx.lineTo(padLeft, padTop);
+      ctx.stroke();
+      ctx.fillStyle = '#9aa8bf';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Time', w - 34, h - 4);
+      ctx.fillText(String(Number(max).toFixed(1)), 4, padTop + 4);
+      ctx.fillText(String(Number(min).toFixed(1)), 4, h - padBottom + 4);
+      ctx.fillText(label + (unit ? (' (' + unit + ')') : ''), 4, h / 2);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (var i = 0; i < vals.length; i++) {
+        var x = padLeft + ((w - padLeft - padRight) * i) / Math.max(vals.length - 1, 1);
+        var y = h - padBottom - ((h - padTop - padBottom) * (vals[i] - min)) / (max - min);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      bindFallbackTooltip(elId, points, unit);
+    }
+
+    function buildLineChart(elId, points, color, label, unit) {
+      var el = document.getElementById(elId);
+      if (!el) return;
+      if (!points || !points.length) {
+        drawFallbackLine(elId, [], color, label, unit);
+        return;
+      }
+      if (!window.Chart) {
+        drawFallbackLine(elId, points, color, label, unit);
+        return;
+      }
+      new Chart(el, {
+        type: 'line',
+        data: { labels: points.map(p => p.ts || ''), datasets: [{ label: label + (unit ? (' (' + unit + ')') : ''), data: points.map(p => p.value || 0), borderColor: color, backgroundColor: color + '33', tension: 0.25, fill: true, pointRadius: 0 }]},
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              callbacks: {
+                label: function(context) {
+                  var v = context.parsed && typeof context.parsed.y === 'number' ? context.parsed.y : 0;
+                  return label + ': ' + Number(v).toFixed(3) + (unit ? (' ' + unit) : '');
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#94a3b8', maxTicksLimit: 8 }, title: { display: true, text: 'Time', color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.35)' } },
+            y: { ticks: { color: '#94a3b8' }, title: { display: true, text: label + (unit ? (' (' + unit + ')') : ''), color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.35)' } }
+          }
+        }
+      });
+    }
+    var metricUnits = {{ metric_units | tojson }};
+    var metricUnit = metricUnits['{{ selected_metric }}'] || '{{ selected_metric_unit }}';
+    buildLineChart('metricChart', {{ metric_points | tojson }}, '#60a5fa', '{{ selected_metric }}', metricUnit);
+  </script>
+</body>
+</html>
