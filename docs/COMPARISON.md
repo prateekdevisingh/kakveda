@@ -69,6 +69,39 @@ clarify where it fits and how it can be complementary.
 | RBAC | ✅ Yes | ⚠️ Limited | ⚠️ Limited | ✅ Yes | ✅ Yes | ✅ Yes |
 | Service-Friendly (White-label) | ⚠️ Partial | ❌ No | ⚠️ Limited | ❌ No | ❌ No | ❌ No |
 
+### Unified Platform Check (Infra + Observability + LLM/Agent Monitoring)
+
+| Platform | Infra Monitoring | Observability (M/L/T) | LLM/Agent Monitoring | One Native Host Agent for all signals |
+|---|---|---|---|---|
+| Kakveda + Netra | ✅ | ✅ | ✅ | ✅ (`kakveda-netra`) |
+| Datadog | ✅ | ✅ | ⚠️ Via multiple products/integrations | ⚠️ Multiple agents/integrations |
+| AppDynamics | ✅ | ✅ | ⚠️ Partial / enterprise integration path | ⚠️ Multiple components |
+| Logz.io | ✅ | ✅ | ⚠️ Integration-led | ⚠️ Integration-led |
+| LangSmith | ❌ Infra not primary | ⚠️ Tracing-focused | ✅ | ❌ |
+| MLflow | ❌ Infra not primary | ⚠️ Experiment/metrics focused | ⚠️ Partial | ❌ |
+
+### Cost Factors (Practical, Indicative)
+
+> Exact prices change frequently by plan/region/volume.  
+> Focus below is on **cost drivers** teams actually feel in production.
+
+| Tool | Typical Pricing Model | Primary Cost Drivers | Cost Predictability |
+|---|---|---|---|
+| Kakveda (OSS) | Self-host / infra cost | Compute, storage, ops overhead | High (you control infra) |
+| Datadog | SaaS subscription + usage | Host count, ingestion volume, retention, premium modules | Medium-Low at high scale |
+| AppDynamics | Enterprise licensing | Agent/APM coverage, enterprise tiering | Medium (contract dependent) |
+| Logz.io | SaaS usage tiers | Log volume, retention, indexed data, add-on modules | Medium |
+| LangSmith | SaaS usage | Traces, events, team scale | Medium |
+| Arize AI | SaaS usage | Model/events volume, retention, advanced monitoring | Medium |
+| W&B | SaaS / hybrid | Seats, artifacts, usage | Medium |
+| MLflow (OSS) | Self-host / infra cost | Storage backend, tracking DB, ops | High (self-managed) |
+
+### Real-World Cost Pattern
+
+- SaaS observability tools usually scale cost with ingestion and retention growth.
+- Multi-tool stacks increase total cost via duplicated data pipelines and overlap.
+- Kakveda + Netra favors an OSS-first route where infra cost is explicit and governance remains in your control.
+
 ### Failure-Oriented Capabilities
 
 | Capability | Kakveda | Datadog / AppDynamics | LangSmith | Arize AI | MLflow | W&B |
