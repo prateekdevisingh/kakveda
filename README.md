@@ -20,7 +20,57 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 | **[docs/concepts.md](docs/concepts.md)** | Core concepts (failures, patterns, fingerprints) |
 | **[docs/failure-intelligence.md](docs/failure-intelligence.md)** | What "failure intelligence" means |
 | **[docs/COMPARISON.md](docs/COMPARISON.md)** | Kakveda vs Datadog, LangSmith, MLflow, etc. |
+| **[docs/netra-host-install.md](docs/netra-host-install.md)** | Install and run `kakveda-netra` on any host |
 | **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** | Common issues and solutions |
+
+---
+
+## 🌍 Current Problem and Kakveda’s Resolution
+
+### What the world is currently facing
+
+- AI/LLM systems fail in recurring ways, but failures are mostly stored as logs, not reusable knowledge.
+- Teams get post-incident visibility, but weak pre-incident prevention.
+- Multi-agent and host-level observability is fragmented across tools and environments.
+- Root-cause and remediation context gets lost across runs, teams, and projects.
+
+### What Kakveda resolves
+
+- Converts failures into a persistent **Failure Knowledge Base (GFKB)**.
+- Performs pattern detection and emits pre-flight warnings to prevent repeat failures.
+- Adds unified host + observability telemetry via `kakveda-netra`.
+- Gives one dashboard for warning history, traces, infra signals, and reliability indicators.
+- Keeps deployment self-hostable and governance-safe for teams needing data control.
+- Positions Kakveda as a **single unified platform** for infra monitoring, observability, and LLM/AI/agent monitoring in one place, where many market offerings still require multiple separate tools.
+
+---
+
+## ✅ Latest Feature Rollup (Yesterday + Today)
+
+`Yesterday (platform baseline delivered)`:
+- Failure Knowledge Base (GFKB), recurring pattern detection, pre-flight warning flow.
+- Event-driven architecture with trace ingestion, classifier, pattern detector, and health scoring.
+- Dashboard for runs, warnings, evaluations, prompts, experiments, and feedback.
+
+`Today (observability + host coverage strengthened)`:
+- `kakveda-netra` host agent with full infra payload groups:
+  - CPU, memory, disk, network, process, file descriptors, system, load, temperature.
+  - Docker container metrics with diagnostics (`docker_error`, socket diagnostics).
+  - Kubernetes inventory/metadata collection (nodes, pods, deployments, services, configmaps, secrets).
+- Observability views:
+  - golden signals, SLO/error budget, inferred service map, synthetic checks,
+  - incident timeline, forecast summary, correlation summary.
+- Detail pages + chart fallback rendering for environments where CDN chart scripts are blocked.
+- Dashboard-driven Netra runtime controls (observability toggle and config sync).
+
+### Native Single Tool Positioning
+
+Kakveda uses **one native host agent (`kakveda-netra`)** to capture infra + observability + container + cluster signals and push them directly into `kakveda-v1.0`.
+This keeps integration simple:
+- install Netra on host,
+- provide dashboard API key,
+- start agent (foreground, background, or systemd),
+- data appears in `/infra` and `/observability`.
 
 ---
 
@@ -190,6 +240,94 @@ kakveda version     # Show version info
 ```
 
 > 💡 Having issues? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common problems and solutions.
+
+## 🛠️ Installation Guide (Platform + Netra)
+
+### A) Install Kakveda Platform (`kakveda-v1.0`)
+
+```bash
+git clone https://github.com/prateekdevisingh/kakveda.git
+cd kakveda/kakveda-v1.0
+docker-compose up -d --build
+```
+
+Verify:
+
+```bash
+curl -i http://localhost:8110/
+curl -i http://localhost:8100/
+```
+
+### B) Install `kakveda-netra` on any host machine
+
+No full Kakveda clone required on host.
+
+```bash
+python3.11 -m venv ~/.venvs/netra
+source ~/.venvs/netra/bin/activate
+pip install -U pip
+pip install "git+https://github.com/prateekdevisingh/kakveda.git#subdirectory=kakveda-aankh"
+```
+
+Configure once:
+
+```bash
+kakveda-netra --setup
+```
+
+Non-interactive example with key:
+
+```bash
+kakveda-netra --setup \
+  --dashboard-url http://localhost:8110 \
+  --event-bus-url http://localhost:8100/publish \
+  --dashboard-api-key "<YOUR_DASHBOARD_API_KEY>" \
+  --agent-name "netra-host-01"
+```
+
+Run options:
+
+```bash
+kakveda-netra --run       # foreground
+kakveda-netra --start     # background
+kakveda-netra --bg-status
+kakveda-netra --stop
+```
+
+Boot-time service:
+
+```bash
+kakveda-netra --install-service --scope system
+kakveda-netra --status --scope system
+```
+
+Important:
+- `DASHBOARD_API_KEY` is mandatory for Netra.
+- Same-host setup can use `localhost`; remote-host setup must use reachable dashboard/event-bus IP or DNS.
+- Netra auto-detects Kubernetes kubeconfig from `KUBECONFIG`, `~/.kube/config`, and sudo user kubeconfig path.
+
+### C) Integration verification
+
+1. `Agents` page: Netra host should appear with heartbeat.
+2. `/infra`: host and container metrics should show.
+3. `/observability`: golden signals and reliability panels should show.
+
+See full host guide: [docs/netra-host-install.md](docs/netra-host-install.md)
+
+## ⚖️ Why `kakveda-netra` is better for this use case
+
+| Area | Kakveda + Netra | Typical multi-tool setup |
+|---|---|---|
+| Host integration | Single native agent | Multiple agents/connectors |
+| Data model | Unified infra + observability + AI/agent context | Split across tools and schemas |
+| Setup effort | Few commands + one dashboard API key | Multiple onboarding steps, tokens, mappings |
+| Governance | Self-host first, data control friendly | Often SaaS-first ingestion pipelines |
+| AI failure intelligence linkage | Native with GFKB + preflight warning pipeline | Usually external/manual correlation |
+
+Netra is purpose-built to integrate directly with `kakveda-v1.0` using one path:
+- collect once,
+- push once,
+- visualize and correlate in one platform.
 
 
 ### Demo Accounts (auto‑created)

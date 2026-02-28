@@ -53,6 +53,51 @@ URL rule:
 - Same machine as Kakveda: `http://localhost:8110` and `http://localhost:8100/publish`
 - Different machine: use reachable IP/DNS of Kakveda services (not localhost of host agent machine)
 
+### Non-interactive config (with dashboard key)
+
+You can skip prompts and pass values directly via CLI flags:
+
+```bash
+kakveda-netra \
+  --setup \
+  --dashboard-url http://localhost:8110 \
+  --event-bus-url http://localhost:8100/publish \
+  --dashboard-api-key "<YOUR_DASHBOARD_API_KEY>" \
+  --agent-name "netra-host-01" \
+  --agent-app-id "host-infra" \
+  --infra-interval 5 \
+  --observability-enabled true \
+  --k8s-auto-map-enabled true
+```
+
+Then start:
+
+```bash
+kakveda-netra --start
+```
+
+### CLI options (most used)
+
+Runtime/service controls:
+- `--setup` interactive or flag-driven setup and save config
+- `--run` foreground run
+- `--start` background run
+- `--stop` stop background process
+- `--bg-status` show background process status
+- `--install-service --scope system|user`
+- `--status --scope system|user`
+- `--uninstall-service --scope system|user`
+
+Core config flags:
+- `--dashboard-url`
+- `--event-bus-url`
+- `--dashboard-api-key` (mandatory)
+- `--agent-name`, `--agent-app-id`, `--agent-version`
+- `--infra-interval`, `--heartbeat-interval`
+- `--observability-enabled`, `--observability-topic`, `--observability-window`
+- `--k8s-auto-map-enabled`, `--k8s-auto-map-max-apps`, `--k8s-auto-map-prefix`
+- `--metrics-endpoint-enabled`, `--metrics-endpoint-host`, `--metrics-endpoint-port`
+
 ## Run Options
 
 ### Foreground
@@ -75,6 +120,32 @@ State files:
 PID: ~/.local/state/kakveda-netra/netra.pid
 LOG: ~/.local/state/kakveda-netra/netra.log
 ```
+
+## Kubernetes kubeconfig auto-detection
+
+Netra auto-detects kubeconfig in this order:
+1. Existing `KUBECONFIG` (if valid path)
+2. `~/.kube/config`
+3. `/home/$SUDO_USER/.kube/config` (when started with sudo)
+
+So on many hosts, Kubernetes data starts working without extra setup.
+
+Examples:
+
+Use default auto-detect:
+
+```bash
+kakveda-netra --start
+```
+
+Use explicit kubeconfig:
+
+```bash
+export KUBECONFIG=$HOME/.kube/config
+kakveda-netra --start
+```
+
+If kubeconfig is not available, Netra continues safely and Kubernetes collectors stay disabled (no crash).
 
 ## Auto-start on Boot (systemd)
 
@@ -112,3 +183,13 @@ kakveda-netra --uninstall-service --scope user
 kakveda-netra --bg-status
 tail -f ~/.local/state/kakveda-netra/netra.log
 ```
+
+## Why Netra is a strong integration choice
+
+Compared to stitching multiple agents/tools, `kakveda-netra` is optimized for direct Kakveda integration:
+
+- One native host agent for infra + observability + container + cluster signals.
+- Same payload family consumed by Kakveda dashboards (`/infra`, `/observability`).
+- Dashboard-controlled config sync (no repeated per-host reconfiguration loop).
+- Easier governance posture with OSS/self-host deployment model.
+- Native linkage with Kakveda failure intelligence pipeline (warnings + GFKB context).
