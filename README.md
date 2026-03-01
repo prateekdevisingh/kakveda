@@ -62,8 +62,7 @@ This repository provides a **complete, production‑adjacent, single‑node impl
   - incident timeline, forecast summary, correlation summary.
 - Detail pages + chart fallback rendering for environments where CDN chart scripts are blocked.
 - Dashboard-driven Netra runtime controls (observability toggle and config sync).
-
-`(day-before-yesterday + yesterday + today advanced observability additions)`:
+- :
 - Realtime service map UX upgrades: zoom/pan/fit/hover + topology density filters + demo mode.
 - Realtime service map page with dependency edges and environment filtering.
 - APM error tracking with grouped exceptions, workflow states, and replay context.
