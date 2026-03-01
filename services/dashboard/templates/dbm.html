@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Database Monitoring</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; display:grid; gap: 12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; vertical-align: top; }
+    .small { color: var(--muted); font-size: .88em; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>Database Monitoring (DBM)</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/">Dashboard</a> · <a href="/observability">Observability</a> · <a href="/profiling">Profiling</a> · <a href="/instrumentation">Instrumentation</a></div>
+</header>
+<div class="wrap">
+  <div class="card">
+    <form method="get" action="/dbm" class="row">
+      <label>App</label>
+      <select name="app_id" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for a in app_choices %}<option value="{{ a }}" {% if selected_app==a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+      <label>Env</label>
+      <select name="environment" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for e in env_choices %}<option value="{{ e }}" {% if selected_env==e %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+      <label>Hours</label><input type="number" min="1" max="168" name="hours" value="{{ hours }}" style="width:90px;" />
+      <button class="btn" type="submit" style="padding:7px 12px;">Apply</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Summary</h3>
+    <div class="small">samples=<strong>{{ summary.samples }}</strong>, slow(>=500ms)=<strong>{{ summary.slow_queries_over_500ms }}</strong>, max=<strong>{{ summary.max_duration_ms|round(2) }}ms</strong>, avg=<strong>{{ summary.avg_duration_ms|round(2) }}ms</strong>, systems=<strong>{{ summary.db_systems|join(', ') }}</strong></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Slow Query Hotspots</h3>
+    <table>
+      <thead><tr><th>Fingerprint</th><th>DB</th><th>Type</th><th>Count</th><th>Avg ms</th><th>Max ms</th><th>Rows Examined</th><th>Wait Event</th><th>Query</th></tr></thead>
+      <tbody>
+        {% for q in hot_queries %}
+        <tr>
+          <td><code>{{ q.fingerprint[:16] }}</code></td>
+          <td>{{ q.db_system }}</td>
+          <td>{{ q.query_type }}</td>
+          <td>{{ q.count }}</td>
+          <td>{{ q.duration_avg_ms|round(2) }}</td>
+          <td>{{ q.duration_max_ms|round(2) }}</td>
+          <td>{{ q.rows_examined_total }}</td>
+          <td>{{ q.wait_event_top or '-' }}</td>
+          <td>{{ q.sample_query }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="small">No DBM samples yet. Ingest trace spans with db_query metadata or use /events/db-query.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Wait / Event Insights</h3>
+    <table>
+      <thead><tr><th>Wait Event</th><th>Count</th></tr></thead>
+      <tbody>
+        {% for w in wait_event_rows %}
+        <tr><td>{{ w.wait_event }}</td><td>{{ w.count }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="small">No wait events.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Recent Query Samples</h3>
+    <table>
+      <thead><tr><th>Time</th><th>App</th><th>Env</th><th>DB</th><th>Type</th><th>Duration ms</th><th>Rows Returned</th><th>Wait</th><th>Query</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.ts }}</td><td>{{ r.app_id }}</td><td>{{ r.environment }}</td><td>{{ r.db_system }}</td><td>{{ r.query_type or '-' }}</td><td>{{ r.duration_ms|round(2) }}</td><td>{{ r.rows_returned }}</td><td>{{ r.wait_event or '-' }}</td><td>{{ (r.query_text or '')[:140] }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="small">No rows found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

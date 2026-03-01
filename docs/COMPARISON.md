@@ -28,6 +28,37 @@ clarify where it fits and how it can be complementary.
 
 ---
 
+## Latest Implemented Scope (Day Before Yesterday + Yesterday + Today)
+
+The following are implemented in this repository now (grouped by delivery wave):
+
+### Day Before Yesterday (foundation hardening)
+
+- Netra host metrics expansion (CPU, memory, disk, network, process, fd, system, load, temperature).
+- Docker diagnostics in payload (`docker_error`, socket visibility).
+- Kubernetes inventory visibility (nodes, pods, deployments, services, configmaps, secrets).
+- Infra detail pages + chart resilience fallback.
+
+### Yesterday (advanced observability building blocks)
+
+- Realtime service map with dependency edges and environment filtering.
+- APM error tracking with grouped exceptions, workflow states, and replay context.
+- Trace pipeline controls (ingestion filters, retention controls, sampling controls).
+- Service observability detail pages (resource-level latency/error/throughput).
+
+### Today (enterprise-style depth and UX)
+
+- Continuous profiler (hotspots + version comparison).
+- Trace ↔ profile drill-down and service-level diagnostics.
+- Dynamic instrumentation controls + execution feedback timeline.
+- DBM (query fingerprints, slow query hotspots, wait/event insights, explain payload support).
+- RUM + RUM monitors.
+- APM monitors + alert lifecycle.
+- Cross-telemetry correlation across trace/log/infra/RUM/DB/security context.
+- Service map UX upgrades (zoom/pan/fit/filters/hover) + demo mode for quick validation.
+
+---
+
 ## Core Design Focus
 
 | Area | Kakveda | Typical Industry Tools |
@@ -82,7 +113,8 @@ clarify where it fits and how it can be complementary.
 
 ### Direct Monthly Cost Comparison (Infra + Observability + AI/LLM)
 
-> Snapshot date: **February 28, 2026**. Public pricing can change by region, commitment, and volume.
+> Snapshot date: **March 1, 2026**. Public pricing can change by region, commitment, and volume.  
+> Prices below are published entry rates or published model references; final bills vary by ingestion, retention, and contract terms.
 
 #### Infra Monitoring (Host / Node level)
 
@@ -113,6 +145,19 @@ clarify where it fits and how it can be complementary.
 | Arize AI | Contact sales | custom | Public page does not publish a universal flat monthly list rate |
 | MLflow OSS | **$0 license/mo** | self-hosted | Infra/ops cost separate |
 
+### Unified Price Matrix (Requested Tool Set)
+
+| Tool | Infra monitoring start | Observability/APM start | AI/LLM/Agent observability start | Public pricing clarity |
+|---|---:|---:|---:|---|
+| **Kakveda v1.0 + Netra** | **$0 license/mo** | **$0 license/mo** | **$0 license/mo** | Clear (OSS self-host) |
+| Datadog | $15/host/mo (annual) | APM $31/host/mo; Logs $0.10/GB | LLM Observability is add-on/usage based | Clear list pricing |
+| Splunk AppDynamics | $6/vCPU/mo | APM bundles from $33/vCPU/mo | AI app monitoring exists, enterprise packaging | Clear starting tiers |
+| Logz.io | Infra ~$0.40/day per 1k time series | Logs ~$0.92/day per GB; Tracing similar entry | Agentic observability token pricing published | Clear usage pricing |
+| LangSmith | N/A (infra not primary) | N/A (APM not primary) | Plus $39/seat/mo (+ usage) | Clear seat + usage |
+| Arize (AX/Phoenix) | N/A (infra not primary) | Product observability included by plan | AX Pro $50/mo; Phoenix OSS free | Clear plan tiers |
+| Azure Monitor | Usage-based (region-specific) | Usage-based per GB ingest/retention | Via Azure ecosystem integrations | No single global flat monthly number |
+| MLflow OSS | N/A (infra not primary) | N/A (APM not primary) | $0 OSS license (self-host or managed via platform vendors) | Clear OSS licensing |
+
 #### Cost Driver Summary
 
 | Tool | Typical pricing model | Primary cost drivers | Cost predictability |
@@ -126,14 +171,6 @@ clarify where it fits and how it can be complementary.
 | W&B | SaaS seat-based | Seats, artifacts, usage | Medium |
 | MLflow (OSS) | Self-host / infra cost | Storage backend, tracking DB, ops | High (self-managed) |
 
-Pricing sources:
-- Datadog: https://www.datadoghq.com/pricing/list/
-- Splunk AppDynamics / Observability: https://www.splunk.com/en_us/products/pricing/it-operations.html
-- Dynatrace: https://www.dynatrace.com/pricing/
-- Logz.io: https://logz.io/pricing/
-- LangSmith: https://www.langchain.com/pricing
-- Weights & Biases: https://wandb.ai/site/pricing
-- Arize AI: https://arize.com/pricing/
 
 ### Real-World Cost Pattern
 
@@ -195,6 +232,30 @@ This makes Kakveda **complementary**, not a replacement, to:
 - APM tools (Datadog, AppDynamics)
 - Evaluation platforms (LangSmith, Arize)
 - ML lifecycle tools (MLflow, W&B)
+
+## What Many Teams Still Miss (and Kakveda Targets)
+
+Common global gap in teams:
+- failures are captured as logs, but not converted into reusable failure memory,
+- incident handling is post-facto (after outage) instead of pre-flight warning with recurrence context,
+- infra/observability/agent telemetry is fragmented into multiple tools and ownership silos.
+
+Kakveda focus:
+- convert recurring failures into a durable knowledge layer,
+- surface proactive warning signals before the same pattern repeats,
+- unify infra + observability + AI/agent telemetry through one native host-side integration path (`kakveda-netra`).
+
+This “failure memory + pre-flight warning + unified telemetry” combination is still uncommon in a single open-source self-hosted stack.
+
+## Setup Simplicity (Why Integration is Easy)
+
+Typical baseline flow:
+1. Run Kakveda stack (`docker compose up -d --build`).
+2. Install Netra on host and provide dashboard API key.
+3. Start Netra (`kakveda-netra --run ...`) or install service mode.
+4. Validate in `/infra`, `/observability`, `/observability/service-map`.
+
+No mandatory per-application code rewrite is required for baseline host + infra + k8s inventory visibility.
 
 ---
 
@@ -267,5 +328,15 @@ rapidly and repeat similar failure modes.
 
 ---
 
-*Last updated: February 2026*  
+### Pricing References
+
+- Datadog pricing: https://www.datadoghq.com/pricing/list/
+- Splunk Observability + AppDynamics pricing: https://www.splunk.com/en_us/products/pricing/it-operations.html
+- Logz.io pricing: https://logz.io/pricing/
+- LangSmith pricing: https://www.langchain.com/pricing
+- Arize pricing: https://arize.com/pricing/
+- Azure Monitor pricing: https://azure.microsoft.com/pricing/details/monitor/
+- MLflow (OSS): https://mlflow.org/
+
+*Last updated: March 1, 2026*  
 *Author: Prateek Chaudhary*

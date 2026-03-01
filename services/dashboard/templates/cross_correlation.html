@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Cross Telemetry Correlation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:18px; display:grid; gap:12px; }
+    .small { color:var(--muted); font-size:.88em; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>Cross-Telemetry Correlation</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/runs/{{ run.id }}">Run Detail</a> · <a href="/observability">Observability</a> · <a href="/rum">RUM</a> · <a href="/dbm">DBM</a></div>
+</header>
+<div class="wrap">
+  <div class="card">
+    <div class="small">Trace run=<strong>{{ run.id }}</strong>, app=<strong>{{ run.app_id }}</strong>, agent=<strong>{{ run.agent_id }}</strong>, ts=<strong>{{ run.ts }}</strong></div>
+    <div class="small" style="margin-top:6px;">Joined context window: ±15 minutes around run time.</div>
+    <div class="small" style="margin-top:6px;">Correlation score: <strong>{{ correlation_score|round(1) }}/100</strong></div>
+    <div class="small" style="margin-top:6px;">
+      Counts:
+      rum={{ joined_counts.rum_events }},
+      security={{ joined_counts.security_signals }},
+      db={{ joined_counts.db_query_samples }},
+      apm_err={{ joined_counts.apm_error_events }},
+      infra={{ joined_counts.infra_snapshots }},
+      obs={{ joined_counts.observability_snapshots }}
+    </div>
+    <div class="small" style="margin-top:8px;">
+      {% for i in insights %}
+      <div>- {{ i }}</div>
+      {% endfor %}
+    </div>
+    <div class="small" style="margin-top:8px;">
+      API: <code>/api/correlation/trace/{{ run.id }}</code> · Platform readiness: <code>/api/platform/readiness</code>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin:0 0 8px;">RUM Context</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Page</th><th>LCP</th><th>Error</th></tr></thead>
+        <tbody>
+          {% for r in rum_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.page or '-' }}</td><td>{{ r.lcp_ms|round(2) }}</td><td>{{ r.js_error_name or '-' }}</td></tr>{% else %}<tr><td colspan="4" class="small">No RUM rows.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Security Signals</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Action</th><th>Message</th></tr></thead>
+        <tbody>
+          {% for r in sec_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.action }}</td><td>{{ r.message }}</td></tr>{% else %}<tr><td colspan="3" class="small">No security/warning signals.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Infra Snapshots</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Agent</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for r in infra_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.agent_id }}</td><td>{{ r.status }}</td></tr>{% else %}<tr><td colspan="3" class="small">No infra snapshots.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Observability Snapshots</h3>
+      <table>
+        <thead><tr><th>Time</th><th>App</th><th>Agent</th></tr></thead>
+        <tbody>
+          {% for r in obs_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.app_id }}</td><td>{{ r.agent_id }}</td></tr>{% else %}<tr><td colspan="3" class="small">No observability snapshots.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin:0 0 8px;">DB Query Context</h3>
+      <table>
+        <thead><tr><th>Time</th><th>DB</th><th>Duration</th><th>Query</th></tr></thead>
+        <tbody>
+          {% for r in db_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.db_system }}</td><td>{{ r.duration_ms|round(2) }}</td><td>{{ (r.query_text or '')[:120] }}</td></tr>{% else %}<tr><td colspan="4" class="small">No DB query samples.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">APM Error Context</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Service</th><th>Error</th><th>Handled</th></tr></thead>
+        <tbody>
+          {% for r in err_rows %}<tr><td>{{ r.ts }}</td><td>{{ r.service_name or '-' }}</td><td>{{ (r.error_message or '')[:120] }}</td><td>{{ r.handled }}</td></tr>{% else %}<tr><td colspan="4" class="small">No APM error rows.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>

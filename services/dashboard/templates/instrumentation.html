@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Dynamic Instrumentation</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; display:grid; gap: 12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; vertical-align: top; }
+    .small { color: var(--muted); font-size: .88em; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>Dynamic Instrumentation</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/">Dashboard</a> · <a href="/observability">Observability</a> · <a href="/profiling">Profiling</a> · <a href="/dbm">DBM</a></div>
+</header>
+<div class="wrap">
+  {% if message %}<div class="card" style="border-color: rgba(34,197,94,.45);">{{ message }}</div>{% endif %}
+  {% if error %}<div class="card" style="border-color: rgba(239,68,68,.45);">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Add Runtime Rule</h3>
+    <form method="post" action="/instrumentation/rules/add" class="row">
+      {{ csrf_input(request) | safe }}
+      <label>Scope</label>
+      <select name="scope_type" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="agent">agent</option><option value="app">app</option><option value="global">global</option></select>
+      <label>Target</label><input name="scope_value" value="netra-prateek-Latitude-5420" style="max-width:220px;" />
+      <label>Type</label>
+      <select name="rule_type" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="log">log</option><option value="metric">metric</option><option value="span">span</option></select>
+      <label>Pattern</label><input name="target_pattern" value="*" style="max-width:200px;" />
+      <label>Condition</label><input name="condition_expr" placeholder="latency_ms > 500" style="max-width:220px;" />
+      <label>Action JSON</label><input name="action_json" value='{"level":"debug","sample_rate":100}' style="min-width:320px;" />
+      <label>Enabled</label><select name="enabled" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="true">true</option><option value="false">false</option></select>
+      <button class="btn" type="submit" style="padding:7px 12px;">Add Rule</button>
+    </form>
+    <div class="small" style="margin-top:8px;">Netra polls dashboard config and applies these rules without restart.</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Rules</h3>
+    <table>
+      <thead><tr><th>ID</th><th>Scope</th><th>Type</th><th>Pattern</th><th>Condition</th><th>Action</th><th>Enabled</th><th>Latest Agent Ack</th><th>Updated</th><th>Ops</th></tr></thead>
+      <tbody>
+        {% for r in rules %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td>{{ r.scope_type }}:{{ r.scope_value }}</td>
+          <td>{{ r.rule_type }}</td>
+          <td>{{ r.target_pattern }}</td>
+          <td>{{ r.condition_expr or '-' }}</td>
+          <td><code>{{ r.action_json }}</code></td>
+          <td>{{ r.enabled }}</td>
+          <td>
+            {% set fb = latest_feedback_by_rule.get(r.id) %}
+            {% if fb %}
+              <strong>{{ fb.status }}</strong> · {{ fb.agent_name }}<br/><span class="small">{{ fb.ts }}</span>{% if fb.message %}<br/><span class="small">{{ fb.message }}</span>{% endif %}
+            {% else %}
+              <span class="small">no ack yet</span>
+            {% endif %}
+          </td>
+          <td>{{ r.updated_at }}</td>
+          <td>
+            <form method="post" action="/instrumentation/rules/{{ r.id }}/toggle" style="display:inline-block">{{ csrf_input(request) | safe }}<button class="btn secondary" type="submit" style="padding:6px 10px;">Toggle</button></form>
+            <form method="post" action="/instrumentation/rules/{{ r.id }}/delete" style="display:inline-block">{{ csrf_input(request) | safe }}<button class="btn secondary" type="submit" style="padding:6px 10px;">Delete</button></form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="small">No dynamic instrumentation rules.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Agent-Applied Ack / Status Timeline</h3>
+    <div class="small" style="margin-bottom:8px;">Agent should post feedback to <code>/events/instrumentation-feedback</code> with status applied/failed/skipped.</div>
+    <table>
+      <thead><tr><th>Time</th><th>Agent</th><th>App</th><th>Rule ID</th><th>Status</th><th>Message</th><th>Details</th></tr></thead>
+      <tbody>
+        {% for f in feedback_rows %}
+        <tr>
+          <td>{{ f.ts }}</td>
+          <td>{{ f.agent_name }}</td>
+          <td>{{ f.app_id or '-' }}</td>
+          <td>{{ f.rule_id or '-' }}</td>
+          <td><strong>{{ f.status }}</strong></td>
+          <td>{{ f.message or '-' }}</td>
+          <td><code>{{ f.details_json }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="small">No instrumentation feedback yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

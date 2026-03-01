@@ -1,0 +1,212 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - APM Pipeline</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .wrap { padding: 18px; display:grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .full { grid-column: 1 / -1; }
+    header { padding: 14px 18px; background: var(--bg); border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .retention-check { display:flex; align-items:center; gap:8px; margin-bottom:8px; line-height: 1.2; }
+    .retention-check input[type="checkbox"] {
+      width: 16px !important;
+      height: 16px !important;
+      min-width: 16px !important;
+      max-width: 16px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border-radius: 3px;
+      display: inline-block !important;
+      align-self: center;
+      vertical-align: middle;
+      appearance: auto;
+      -webkit-appearance: checkbox;
+      accent-color: #3b82f6;
+      box-shadow: none !important;
+      flex: 0 0 16px;
+    }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size: 0.9em; }
+    @media (max-width: 1000px) { .wrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>APM Trace Pipeline</strong> <span class="small">({{ email }})</span></div>
+    <div>
+      <a href="/">Dashboard</a> · <a href="/infra">Infra</a> · <a href="/observability">Observability</a> · <a href="/runs">Runs</a>
+    </div>
+  </header>
+  <div class="wrap">
+    {% if message %}<div class="card full" style="border-color: rgba(34,197,94,.5);">{{ message }}</div>{% endif %}
+    {% if error %}<div class="card full" style="border-color: rgba(239,68,68,.5);">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <h3>Pipeline Config</h3>
+      <form method="post" action="/apm/pipeline/config">
+        {{ csrf_input(request) | safe }}
+        <div class="row"><label>Enabled</label><select name="enabled"><option value="true" {% if cfg.enabled %}selected{% endif %}>true</option><option value="false" {% if not cfg.enabled %}selected{% endif %}>false</option></select></div>
+        <div class="row"><label>Retention days</label><input type="number" name="retention_days" min="1" value="{{ cfg.retention_days or 14 }}" /></div>
+        <div class="row"><label>Default sample rate %</label><input type="number" name="default_sample_rate" min="0" max="100" value="{{ cfg.default_sample_rate or 100 }}" /></div>
+        <div class="row"><label>Keep errors</label><select name="keep_error_traces"><option value="true" {% if cfg.keep_error_traces %}selected{% endif %}>true</option><option value="false" {% if not cfg.keep_error_traces %}selected{% endif %}>false</option></select></div>
+        <div class="row"><label>Drop healthchecks</label><select name="drop_healthcheck_traces"><option value="true" {% if cfg.drop_healthcheck_traces %}selected{% endif %}>true</option><option value="false" {% if not cfg.drop_healthcheck_traces %}selected{% endif %}>false</option></select></div>
+        <div style="margin-top:10px;"><button class="btn" type="submit">Save Config</button></div>
+      </form>
+      <form method="post" action="/apm/pipeline/retention/run" style="margin-top:10px;">
+        {{ csrf_input(request) | safe }}
+        <label class="small retention-check">
+          <input type="checkbox" name="include_error_traces" value="true" />
+          include error traces in deletion
+        </label>
+        <button class="btn secondary" type="submit">Run Retention Now</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Per-Project Retention Policy</h3>
+      <form method="get" action="/apm/pipeline" class="row" style="margin-bottom:8px;">
+        <label>Load Project</label>
+        <select name="project_id">
+          <option value="">Select</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}" {% if selected_project_id == p.id %}selected{% endif %}>{{ p.name }} (#{{ p.id }})</option>
+          {% endfor %}
+        </select>
+        <button class="btn secondary" type="submit">Load</button>
+      </form>
+      <form method="post" action="/apm/pipeline/project-retention/save">
+        {{ csrf_input(request) | safe }}
+        <div class="row">
+          <label>Project</label>
+          <select name="project_id">
+            <option value="">Select</option>
+            {% for p in projects %}
+            <option value="{{ p.id }}" {% if selected_project_id == p.id %}selected{% endif %}>{{ p.name }} (#{{ p.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="row"><label>Enabled</label><select name="enabled"><option value="true" {% if not selected_policy or selected_policy.enabled %}selected{% endif %}>true</option><option value="false" {% if selected_policy and not selected_policy.enabled %}selected{% endif %}>false</option></select></div>
+        <div class="row"><label>Trace retention days</label><input type="number" min="1" name="trace_retention_days" value="{{ (selected_policy.trace_retention_days if selected_policy else defaults.trace_retention_days) }}" /></div>
+        <div class="row"><label>Trace max rows</label><input type="number" min="1000" name="trace_max_rows" value="{{ (selected_policy.trace_max_rows if selected_policy else defaults.trace_max_rows) }}" /></div>
+        <div class="row"><label>Infra retention days</label><input type="number" min="1" name="infra_retention_days" value="{{ (selected_policy.infra_retention_days if selected_policy else defaults.infra_retention_days) }}" /></div>
+        <div class="row"><label>Infra max rows</label><input type="number" min="1000" name="infra_max_rows" value="{{ (selected_policy.infra_max_rows if selected_policy else defaults.infra_max_rows) }}" /></div>
+        <div class="row"><label>Obs retention days</label><input type="number" min="1" name="observability_retention_days" value="{{ (selected_policy.observability_retention_days if selected_policy else defaults.observability_retention_days) }}" /></div>
+        <div class="row"><label>Obs max rows</label><input type="number" min="1000" name="observability_max_rows" value="{{ (selected_policy.observability_max_rows if selected_policy else defaults.observability_max_rows) }}" /></div>
+        <div style="margin-top:10px;"><button class="btn" type="submit">Save Project Policy</button></div>
+      </form>
+      <div class="small" style="margin-top:8px;">Applied by ingest housekeeping automatically.</div>
+    </div>
+
+    <div class="card">
+      <h3>Add Sampling Rule</h3>
+      <form method="post" action="/apm/pipeline/rules/add">
+        {{ csrf_input(request) | safe }}
+        <div class="row"><label>Name</label><input name="name" value="prod-errors-fast" /></div>
+        <div class="row"><label>Priority</label><input name="priority" type="number" value="100" /></div>
+        <div class="row"><label>App pattern</label><input name="app_id_pattern" placeholder="app-*"/></div>
+        <div class="row"><label>Trace name pattern</label><input name="name_pattern" value="*" /></div>
+        <div class="row"><label>Min duration ms</label><input name="min_duration_ms" type="number" placeholder="1000" /></div>
+        <div class="row"><label>Error only</label><select name="error_only"><option value="false">false</option><option value="true">true</option></select></div>
+        <div class="row"><label>Sample rate %</label><input name="sample_rate" type="number" min="0" max="100" value="100" /></div>
+        <div style="margin-top:10px;"><button class="btn" type="submit">Add Rule</button></div>
+      </form>
+    </div>
+
+    <div class="card full">
+      <h3>Sampling Rules</h3>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Priority</th><th>Enabled</th><th>App Pattern</th><th>Name Pattern</th><th>Min ms</th><th>Error Only</th><th>Rate%</th><th>Action</th></tr></thead>
+        <tbody>
+          {% for r in rules %}
+          <tr>
+            <td>{{ r.id }}</td><td>{{ r.name }}</td><td>{{ r.priority }}</td><td>{{ r.enabled }}</td>
+            <td>{{ r.app_id_pattern or '-' }}</td><td>{{ r.name_pattern or '-' }}</td><td>{{ r.min_duration_ms or '-' }}</td><td>{{ r.error_only }}</td><td>{{ r.sample_rate }}</td>
+            <td>
+              <form method="post" action="/apm/pipeline/rules/{{ r.id }}/delete" style="display:inline">
+                {{ csrf_input(request) | safe }}
+                <button class="btn secondary" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="small">No sampling rules.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h3>Project Retention Policies</h3>
+      <table>
+        <thead><tr><th>Project</th><th>Enabled</th><th>Trace (days/rows)</th><th>Infra (days/rows)</th><th>Obs (days/rows)</th><th>Updated</th></tr></thead>
+        <tbody>
+          {% for r in policy_rows %}
+          <tr>
+            <td>#{{ r.project_id }}</td>
+            <td>{{ r.enabled }}</td>
+            <td>{{ r.trace_retention_days }} / {{ r.trace_max_rows }}</td>
+            <td>{{ r.infra_retention_days }} / {{ r.infra_max_rows }}</td>
+            <td>{{ r.observability_retention_days }} / {{ r.observability_max_rows }}</td>
+            <td>{{ r.updated_at }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="small">No project retention policies.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Add Span Metric Config</h3>
+      <form method="post" action="/apm/pipeline/span-metrics/add">
+        {{ csrf_input(request) | safe }}
+        <div class="row"><label>Name</label><input name="name" value="http.client.p95" /></div>
+        <div class="row"><label>Enabled</label><select name="enabled"><option value="true">true</option><option value="false">false</option></select></div>
+        <div class="row"><label>Span pattern</label><input name="span_name_pattern" value="http.*" /></div>
+        <div class="row"><label>App pattern</label><input name="app_id_pattern" placeholder="optional"/></div>
+        <div class="row"><label>Aggregation</label><select name="aggregation"><option value="count">count</option><option value="avg">avg</option><option value="max">max</option><option value="p95" selected>p95</option></select></div>
+        <div class="row"><label>Field</label><input name="field_name" value="duration_ms" /></div>
+        <div style="margin-top:10px;"><button class="btn" type="submit">Add Metric Config</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Span Metric Configs</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Pattern</th><th>App Pattern</th><th>Agg</th><th>Field</th><th>Action</th></tr></thead>
+        <tbody>
+          {% for c in metric_cfgs %}
+          <tr>
+            <td>{{ c.name }}</td><td>{{ c.span_name_pattern }}</td><td>{{ c.app_id_pattern or '-' }}</td><td>{{ c.aggregation }}</td><td>{{ c.field_name }}</td>
+            <td>
+              <form method="post" action="/apm/pipeline/span-metrics/{{ c.id }}/delete" style="display:inline">
+                {{ csrf_input(request) | safe }}
+                <button class="btn secondary" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="small">No span metric configs.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card full">
+      <h3>Recent Generated Span Metrics</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Metric</th><th>App</th><th>Value</th><th>Run ID</th></tr></thead>
+        <tbody>
+          {% for p in metric_points %}
+          <tr><td>{{ p.ts }}</td><td>{{ p.metric_name }}</td><td>{{ p.app_id }}</td><td>{{ p.value }}</td><td>{{ p.trace_run_id or '-' }}</td></tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No metric points yet. Ingest traces to generate.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

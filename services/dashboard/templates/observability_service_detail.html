@@ -1,0 +1,235 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Service Observability</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    .wrap { padding: 18px; max-width: 1400px; margin: 0 auto; }
+    .grid { display:grid; grid-template-columns: repeat(5,1fr); gap:10px; margin-bottom:10px; }
+    .card { background: var(--card); border:1px solid var(--border); border-radius: 12px; padding: 14px; }
+    header { padding: 14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:0.9em; }
+    .value { font-size: 1.45em; font-weight:700; color:#60a5fa; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Service: {{ selected_app }}</strong> <span class="small">({{ email }})</span></div>
+    <div><a href="/observability">Back to Observability</a> · <a href="/runs?app_id={{ selected_app }}">Runs</a></div>
+  </header>
+  <div class="wrap">
+    <div class="card" style="margin-bottom:10px;">
+      <form method="get" action="/observability/service" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <label>App</label><input name="app_id" value="{{ selected_app }}" />
+        <label>Agent</label><input name="agent_id" value="{{ selected_agent }}" placeholder="optional" />
+        <label>Hours</label><input type="number" min="1" max="168" name="hours" value="{{ hours }}" />
+        <button class="btn" type="submit">Apply</button>
+      </form>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="small">Requests</div><div class="value">{{ req_total }}</div></div>
+      <div class="card"><div class="small">Errors</div><div class="value">{{ err_total }}</div></div>
+      <div class="card"><div class="small">Error Rate %</div><div class="value">{{ error_rate_percent|round(2) }}</div></div>
+      <div class="card"><div class="small">Latency p50 ms</div><div class="value">{{ latency_p50|round(2) }}</div></div>
+      <div class="card"><div class="small">Latency p95 / p99 ms</div><div class="value">{{ latency_p95|round(2) }} / {{ latency_p99|round(2) }}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Latency Trend</h3>
+      <canvas id="latChart" height="110"></canvas>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Dependencies</h3>
+      <table>
+        <thead><tr><th>Target Service</th><th>Calls</th><th>Error %</th><th>Latency Avg (ms)</th><th>Latency p95 (ms)</th></tr></thead>
+        <tbody>
+          {% for d in dependencies %}
+          <tr><td>{{ d.service }}</td><td>{{ d.calls }}</td><td>{{ d.error_rate_percent|round(2) }}</td><td>{{ d.latency_avg_ms|round(2) }}</td><td>{{ d.latency_p95_ms|round(2) }}</td></tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No dependencies detected from spans.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Resource-Level Analytics (endpoint/query)</h3>
+      <table>
+        <thead><tr><th>Resource</th><th>Req</th><th>Error %</th><th>p95 ms</th><th>p99 ms</th><th>RPM</th></tr></thead>
+        <tbody>
+          {% for r in resource_rows %}
+          <tr>
+            <td>{{ r.resource }}</td>
+            <td>{{ r.count }}</td>
+            <td>{{ r.error_rate_percent|round(2) }}</td>
+            <td>{{ r.latency_p95_ms|round(2) }}</td>
+            <td>{{ r.latency_p99_ms|round(2) }}</td>
+            <td>{{ r.throughput_rpm|round(3) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="small">No resource-level analytics available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Top Error Signatures</h3>
+      <table>
+        <thead><tr><th>Error Signature</th><th>Count</th><th>Latest</th></tr></thead>
+        <tbody>
+          {% for e in error_rows %}
+          <tr><td>{{ e.signature }}</td><td>{{ e.count }}</td><td>{{ e.latest_ts }}</td></tr>
+          {% else %}
+          <tr><td colspan="3" class="small">No backend errors in selected window.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="small" style="margin-top:8px;">
+        API: <code>/api/apm/trace-analytics?app_id={{ selected_app }}&agent_id={{ selected_agent }}&hours={{ hours }}</code>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Percentile Heatmap (p95/p99)</h3>
+      <table>
+        <thead><tr><th>Resource</th><th>p95</th><th>p99</th><th>Error %</th></tr></thead>
+        <tbody>
+          {% for h in percentile_heatmap %}
+          <tr>
+            <td>{{ h.resource }}</td>
+            <td style="background: rgba(96,165,250,{{ (h.p95 / 2000.0) if h.p95 < 2000 else 1 }});">{{ h.p95|round(2) }}</td>
+            <td style="background: rgba(239,68,68,{{ (h.p99 / 3000.0) if h.p99 < 3000 else 1 }});">{{ h.p99|round(2) }}</td>
+            <td>{{ h.error_rate_percent|round(2) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="small">No percentile heatmap rows.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-bottom:10px;">
+      <h3 style="margin:0 0 8px;">Slowest Resource Drilldown</h3>
+      <table>
+        <thead><tr><th>Resource</th><th>p99 ms</th><th>p95 ms</th><th>Error %</th><th>RPM</th></tr></thead>
+        <tbody>
+          {% for s in slowest_resources %}
+          <tr>
+            <td>{{ s.resource }}</td>
+            <td>{{ s.latency_p99_ms|round(2) }}</td>
+            <td>{{ s.latency_p95_ms|round(2) }}</td>
+            <td>{{ s.error_rate_percent|round(2) }}</td>
+            <td>{{ s.throughput_rpm|round(3) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No slow resources detected.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Recent Runs</h3>
+      <table>
+        <thead><tr><th>Time</th><th>Run ID</th><th>Status</th><th>Duration ms</th><th>Agent</th></tr></thead>
+        <tbody>
+          {% for r in recent_runs %}
+          <tr>
+            <td>{{ r.ts }}</td>
+            <td><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+            <td>{{ r.status }}</td>
+            <td>{{ r.duration_ms or 0 }}</td>
+            <td>{{ r.agent_id }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No runs in selected window.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    var pts = {{ trend_points | tojson }};
+    var c = document.getElementById('latChart');
+    function drawFallbackLatency(canvas, points) {
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      var w = canvas.clientWidth || 980;
+      var h = canvas.height || 110;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.clearRect(0, 0, w, h);
+      if (!points || !points.length) {
+        ctx.fillStyle = '#9aa8bf';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('No latency trend data', 12, 20);
+        return;
+      }
+      var vals = points.map(function (p) {
+        var v = Number(p.value || 0);
+        return Number.isFinite(v) ? v : 0;
+      });
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+      if (min === max) max = min + 1;
+      var padL = 40, padR = 10, padT = 10, padB = 20;
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(padL, h - padB);
+      ctx.lineTo(w - padR, h - padB);
+      ctx.moveTo(padL, h - padB);
+      ctx.lineTo(padL, padT);
+      ctx.stroke();
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (var i = 0; i < vals.length; i++) {
+        var x = padL + ((w - padL - padR) * i) / Math.max(vals.length - 1, 1);
+        var y = h - padB - ((h - padT - padB) * (vals[i] - min)) / (max - min);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.fillStyle = '#9aa8bf';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('Latency (ms)', 4, 12);
+      ctx.fillText(String(max.toFixed(1)), 4, 24);
+      ctx.fillText(String(min.toFixed(1)), 4, h - padB + 4);
+    }
+
+    if (!c) {
+      // no-op
+    } else if (window.Chart && pts.length) {
+      new Chart(c, {
+        type: 'line',
+        data: {
+          labels: pts.map(p => p.ts),
+          datasets: [{
+            label: 'Latency',
+            data: pts.map(p => p.value),
+            borderColor: '#60a5fa',
+            backgroundColor: 'rgba(96,165,250,.12)',
+            tension: 0.25,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: '#9aa8bf' } }, y: { ticks: { color: '#9aa8bf' } } }
+        }
+      });
+    } else {
+      drawFallbackLatency(c, pts);
+    }
+  </script>
+</body>
+</html>

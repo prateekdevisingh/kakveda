@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Continuous Profiler</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding: 14px 18px; border-bottom: 1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding: 18px; display:grid; grid-template-columns: 1fr; gap: 12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; }
+    .small { color: var(--muted); font-size: .88em; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>Continuous Profiler</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/">Dashboard</a> · <a href="/observability">Observability</a> · <a href="/dbm">DBM</a> · <a href="/instrumentation">Instrumentation</a></div>
+</header>
+<div class="wrap">
+  <div class="card">
+    <form method="get" action="/profiling" class="row">
+      <label>App</label>
+      <select name="app_id" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for a in app_choices %}<option value="{{ a }}" {% if selected_app==a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+      <label>Env</label>
+      <select name="environment" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for e in env_choices %}<option value="{{ e }}" {% if selected_env==e %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+      <label>Hours</label><input type="number" min="1" max="168" name="hours" value="{{ hours }}" style="width:90px;" />
+      <label>Baseline</label>
+      <select name="baseline_version" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">--</option>
+        {% for v in ver_choices %}<option value="{{ v }}" {% if baseline_version==v %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select>
+      <label>Compare</label>
+      <select name="compare_version" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">--</option>
+        {% for v in ver_choices %}<option value="{{ v }}" {% if compare_version==v %}selected{% endif %}>{{ v }}</option>{% endfor %}
+      </select>
+      <button class="btn" type="submit" style="padding:7px 12px;">Apply</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Method Hotspots (always-on samples)</h3>
+    <table>
+      <thead><tr><th>Service</th><th>Method</th><th>Samples</th><th>CPU Total ms</th><th>Memory Max bytes</th><th>Last Seen</th></tr></thead>
+      <tbody>
+        {% for h in hotspots %}
+        <tr><td>{{ h.service_name }}</td><td>{{ h.method_name }}</td><td>{{ h.samples }}</td><td>{{ h.cpu_ms_total|round(2) }}</td><td>{{ h.memory_bytes_max }}</td><td>{{ h.last_ts }}</td></tr>
+        {% else %}
+        <tr><td colspan="6" class="small">No profiler samples yet. Ingest traces with spans.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Version Comparison</h3>
+    <div class="small">Compare method-level CPU hotspots across versions.</div>
+    <table>
+      <thead><tr><th>Method Key</th><th>Baseline CPU ms</th><th>Compare CPU ms</th><th>Delta ms</th><th>Delta %</th></tr></thead>
+      <tbody>
+        {% for r in version_compare_rows %}
+        <tr><td>{{ r.key }}</td><td>{{ r.baseline_cpu_ms|round(2) }}</td><td>{{ r.compare_cpu_ms|round(2) }}</td><td>{{ r.delta_cpu_ms|round(2) }}</td><td>{{ r.delta_percent|round(2) }}%</td></tr>
+        {% else %}
+        <tr><td colspan="5" class="small">Select baseline + compare versions to see changes.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Trace ↔ Profile Correlation</h3>
+    {% if trace_run_id %}
+    <div class="small" style="margin-bottom:8px;">Correlated samples for trace_run_id=<strong>{{ trace_run_id }}</strong></div>
+    {% endif %}
+    <table>
+      <thead><tr><th>Service</th><th>Method</th><th>CPU ms</th><th>Memory bytes</th><th>Version</th><th>Timestamp</th></tr></thead>
+      <tbody>
+        {% for r in correlated_rows %}
+        <tr><td>{{ r.service_name }}</td><td>{{ r.method_name }}</td><td>{{ r.cpu_ms|round(2) }}</td><td>{{ r.memory_bytes }}</td><td>{{ r.version }}</td><td>{{ r.ts }}</td></tr>
+        {% else %}
+        <tr><td colspan="6" class="small">Open from run detail using "Trace ↔ Profile drill-down" to see linked rows.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

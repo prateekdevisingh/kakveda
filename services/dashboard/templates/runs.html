@@ -65,7 +65,7 @@
       </form>
 
       <table>
-        <thead><tr><th>When</th><th>App</th><th>Agent</th><th>Provider</th><th>Name</th><th>Status</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Input</th></tr></thead>
+        <thead><tr><th>When</th><th>App</th><th>Agent</th><th>Provider</th><th>Name</th><th>Status</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Correlation</th><th>Input</th></tr></thead>
         <tbody>
           {% for r in runs %}
           <tr>
@@ -78,6 +78,7 @@
             <td class="small">{{ r.duration_ms or '' }} ms</td>
             <td class="small">{{ r.total_tokens or '' }}</td>
             <td class="small">{% if r.cost_usd is not none %}${{ '%.6f'|format((r.cost_usd or 0)/1000000) }}{% endif %}</td>
+            <td class="small"><a href="/correlation/oneclick/{{ r.id }}">one-click</a></td>
             <td class="small">{{ r.input_json }}</td>
           </tr>
           {% endfor %}

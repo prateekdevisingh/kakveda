@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - RUM</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:18px; display:grid; gap:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .small { color:var(--muted); font-size:.88em; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>RUM (Real User Monitoring)</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/">Dashboard</a> · <a href="/observability">Observability</a> · <a href="/apm/monitors">APM Monitors</a></div>
+</header>
+<div class="wrap">
+  <div class="card">
+    <form method="get" action="/rum" class="row">
+      <label>App</label>
+      <select name="app_id" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for a in app_choices %}<option value="{{ a }}" {% if selected_app==a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+      </select>
+      <label>Env</label>
+      <select name="environment" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="">All</option>
+        {% for e in env_choices %}<option value="{{ e }}" {% if selected_env==e %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+      <label>Hours</label><input type="number" min="1" max="168" name="hours" value="{{ hours }}" style="width:90px;" />
+      <button class="btn" type="submit" style="padding:7px 12px;">Apply</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Frontend Performance / Error Summary</h3>
+    <div class="small">events=<strong>{{ summary.events }}</strong>, sessions=<strong>{{ summary.sessions }}</strong>, users=<strong>{{ summary.users }}</strong>, avg_lcp=<strong>{{ summary.avg_lcp_ms|round(2) }}ms</strong>, avg_fid=<strong>{{ summary.avg_fid_ms|round(2) }}ms</strong>, avg_cls=<strong>{{ summary.avg_cls|round(4) }}</strong>, js_error_rate=<strong>{{ summary.js_error_rate_percent|round(2) }}%</strong></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">RUM Monitors</h3>
+    <form method="post" action="/rum/monitors/add" class="row" style="margin-bottom:10px;">
+      {{ csrf_input(request) | safe }}
+      <input name="name" placeholder="monitor name" style="max-width:160px;" />
+      <input name="app_id" placeholder="app (optional)" style="max-width:140px;" />
+      <input name="environment" placeholder="env (optional)" style="max-width:120px;" />
+      <select name="metric_name" class="btn secondary" style="padding:6px 10px; width:auto;">
+        <option value="lcp_ms">lcp_ms</option><option value="fid_ms">fid_ms</option><option value="cls">cls</option><option value="load_time_ms">load_time_ms</option><option value="js_error_rate_percent">js_error_rate_percent</option>
+      </select>
+      <select name="threshold_op" class="btn secondary" style="padding:6px 10px; width:auto;"><option value=">">&gt;</option><option value=">=">&gt;=</option><option value="<">&lt;</option><option value="<=">&lt;=</option></select>
+      <input name="threshold_value" value="2500" style="max-width:100px;" />
+      <input name="window_minutes" value="15" style="max-width:90px;" />
+      <select name="enabled" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="true">true</option><option value="false">false</option></select>
+      <button class="btn" type="submit" style="padding:7px 12px;">Add</button>
+    </form>
+    <table>
+      <thead><tr><th>Name</th><th>Scope</th><th>Metric</th><th>Threshold</th><th>Window</th><th>Enabled</th></tr></thead>
+      <tbody>
+        {% for m in monitors %}
+        <tr><td>{{ m.name }}</td><td>{{ m.app_id or '*' }} / {{ m.environment or '*' }}</td><td>{{ m.metric_name }}</td><td>{{ m.threshold_op }} {{ m.threshold_value }}</td><td>{{ m.window_minutes }}m</td><td>{{ m.enabled }}</td></tr>
+        {% else %}
+        <tr><td colspan="6" class="small">No RUM monitors.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">RUM Monitor Alerts</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Monitor</th><th>App</th><th>Metric</th><th>Observed</th><th>Threshold</th><th>Severity</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr><td>{{ a.ts }}</td><td>{{ a.monitor_name }}</td><td>{{ a.app_id or '-' }}</td><td>{{ a.metric_name }}</td><td>{{ a.observed_value|round(3) }}</td><td>{{ a.threshold_value|round(3) }}</td><td>{{ a.severity }}</td><td>{{ a.status }}</td></tr>
+        {% else %}
+        <tr><td colspan="8" class="small">No RUM alerts.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Recent User Activity / Frontend Errors</h3>
+    <table>
+      <thead><tr><th>Time</th><th>App</th><th>Env</th><th>Platform</th><th>Session</th><th>Page</th><th>Action</th><th>LCP</th><th>FID</th><th>CLS</th><th>Error</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.ts }}</td><td>{{ r.app_id }}</td><td>{{ r.environment }}</td><td>{{ r.platform or '-' }}</td><td>{{ r.session_id or '-' }}</td><td>{{ r.page or '-' }}</td><td>{{ r.action or '-' }}</td><td>{{ r.lcp_ms|round(2) }}</td><td>{{ r.fid_ms|round(2) }}</td><td>{{ r.cls|round(4) }}</td><td>{{ r.js_error_name or '-' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11" class="small">No RUM events.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

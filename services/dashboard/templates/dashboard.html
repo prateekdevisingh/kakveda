@@ -11,7 +11,7 @@
     .brand { display: flex; gap: 12px; align-items: center; }
     .brand strong { font-size: 1.3em; color: #60a5fa; }
     .small { color: var(--muted); font-size: 0.88em; }
-    .nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .nav { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
     .wrap { padding: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1600px; margin: 0 auto; }
     .full { grid-column: 1 / -1; }
     .row { display: flex; gap: 10px; align-items: center; }
@@ -35,10 +35,22 @@
     .stat-item { text-align: center; flex: 1; padding: 8px; }
     .stat-value { font-size: 1.8em; font-weight: 700; color: #60a5fa; }
     .stat-label { font-size: 0.75em; color: var(--muted); text-transform: uppercase; margin-top: 4px; }
-    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
-    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.9em;
+      line-height: 1;
+      white-space: nowrap;
+    }
     .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
     .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .nav form { margin-top: 0; }
+    .nav form .btn { min-height: 34px; padding: 6px 12px; line-height: 1; }
     @media (max-width: 1000px) { .wrap { grid-template-columns: 1fr; padding: 16px; } header { flex-direction: column; gap: 12px; } }
   </style>
 </head>
@@ -53,6 +65,14 @@
     <div class="nav">
       <div class="nav-links">
         <a href="/" class="active">Dashboard</a>
+        <a href="/infra">Infra</a>
+        <a href="/observability">Observability</a>
+        <a href="/rum">RUM</a>
+        <a href="/apm/monitors">APM Monitors</a>
+        <a href="/profiling">Profiling</a>
+        <a href="/dbm">DBM</a>
+        <a href="/instrumentation">Instrumentation</a>
+        <a href="/apm/pipeline">APM Pipeline</a>
         <a href="/agents">Agents</a>
         <a href="/runs">Runs</a>
         <a href="/scenarios">Scenarios</a>

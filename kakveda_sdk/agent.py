@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 
 from .guard import KakvedaGuard
 from .registration import register_agent, start_heartbeat
+from .system_probe import ProbeLimits, SystemProbe, SystemProbeEngine
 
 
 def _env(name: str, default: str) -> str:
@@ -54,6 +55,8 @@ class KakvedaAgent:
         dashboard_api_key: Optional[str] = None,
         auto_register: Optional[bool] = None,
         enable_heartbeat: Optional[bool] = None,
+        enable_infra_metrics: Optional[bool] = None,
+        infra_interval_sec: Optional[int] = None,
         guard: Optional[KakvedaGuard] = None,
         capabilities: Optional[list[str]] = None,
     ) -> None:
@@ -65,6 +68,12 @@ class KakvedaAgent:
         self.auto_register = auto_register if auto_register is not None else _env_bool("AUTO_REGISTER", True)
         self.enable_heartbeat = (
             enable_heartbeat if enable_heartbeat is not None else _env_bool("ENABLE_HEARTBEAT", True)
+        )
+        self.enable_infra_metrics = (
+            enable_infra_metrics if enable_infra_metrics is not None else _env_bool("ENABLE_INFRA_METRICS", True)
+        )
+        self.infra_interval_sec = infra_interval_sec if infra_interval_sec is not None else _env_int(
+            "INFRA_COLLECTION_INTERVAL_SEC", 5
         )
         self.base_url = _default_base_url(self.agent_name)
         self.capabilities = capabilities or _capabilities_from_env()
@@ -92,6 +101,10 @@ class KakvedaAgent:
                 interval_sec=interval,
             )
 
+        self._system_probe_engine: Optional[SystemProbeEngine] = None
+        if self.enable_infra_metrics:
+            self._start_system_probe()
+
     def execute(
         self,
         *,
@@ -111,3 +124,44 @@ class KakvedaAgent:
             model_name=model_name,
             return_object=return_object,
         )
+
+    def _start_system_probe(self) -> None:
+        limits = ProbeLimits(
+            max_interfaces=_env_int("INFRA_MAX_INTERFACES", 50),
+            max_containers=_env_int("INFRA_MAX_CONTAINERS", 100),
+            max_partitions=_env_int("INFRA_MAX_PARTITIONS", 20),
+        )
+        probe = SystemProbe(limits=limits)
+
+        endpoint_enabled = _env_bool("INFRA_METRICS_ENDPOINT_ENABLED", False)
+        if endpoint_enabled:
+            host = _env("INFRA_METRICS_ENDPOINT_HOST", "0.0.0.0")
+            port = _env_int("INFRA_METRICS_ENDPOINT_PORT", 9320)
+            probe.start_metrics_endpoint(host=host, port=port)
+
+        topic = _env("INFRA_METRICS_TOPIC", "infra.metrics")
+        source_agent_id = self.agent_id if self.agent_id is not None else self.agent_name
+
+        def _publish(payload: dict[str, Any]) -> None:
+            event = {
+                "trace_id": payload.get("timestamp"),
+                "ts": payload.get("timestamp"),
+                "app_id": self.app_id,
+                "agent_id": source_agent_id,
+                "node_metrics_payload": payload,
+                "env": {
+                    "event_name": topic,
+                    "status": "completed",
+                    "source": "system_probe",
+                },
+                "infra": payload.get("infra", {}),
+            }
+            self.guard.publish_event(topic, event)
+
+        self._system_probe_engine = SystemProbeEngine(
+            agent_id=str(source_agent_id),
+            interval_sec=self.infra_interval_sec,
+            on_payload=_publish,
+            probe=probe,
+        )
+        self._system_probe_engine.start()

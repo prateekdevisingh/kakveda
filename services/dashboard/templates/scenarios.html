@@ -54,14 +54,25 @@
   </header>
 
   <div class="wrap">
+    {% if message %}
+    <div class="card" style="border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.12); color: #bbf7d0; margin-bottom:12px;">
+      {{ message }}
+    </div>
+    {% endif %}
+    {% if error %}
+    <div class="card" style="border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); color: #fecaca; margin-bottom:12px;">
+      {{ error }}
+    </div>
+    {% endif %}
     <div class="card">
       <h3>Run a Scenario</h3>
+      <div class="small" style="margin-bottom:8px;">Scenario runner executes with internal dashboard agent; use app_id to open app-level observability.</div>
       <form method="post" action="/scenarios/run">
         {{ csrf_input(request) | safe }}
         <div class="grid">
           <div>
-            <label>App</label>
-            <select name="app_id">
+            <label>Application (app_id)</label>
+            <select name="app_id" id="appIdSelect">
               {% for a in app_choices %}
                 <option value="{{ a }}">{{ a }}</option>
               {% endfor %}
@@ -73,7 +84,7 @@
           </div>
           <div>
             <label>Scenario <span class="info-badge">50 questions</span></label>
-            <select name="scenario_id" id="scenarioSelect" onchange="loadScenario(this.options[this.selectedIndex].getAttribute('data-code'))">>
+            <select name="scenario_id" id="scenarioSelect" onchange="loadScenario(this.options[this.selectedIndex].getAttribute('data-code'))">
               <option value="">-- Choose a scenario to test --</option>
               <optgroup label="Preflight Validation">
                 <option value="1" data-code="Q1">Q1: Early Detection</option>
@@ -140,6 +151,9 @@
           <div>
             <button class="btn" type="submit">Run</button>
           </div>
+          <div>
+            <a id="openObsBtn" class="btn secondary" style="padding:6px 10px; white-space:nowrap;" href="/observability">Open App in Observability</a>
+          </div>
         </div>
         
         <!-- Scenario Details Section -->
@@ -187,8 +201,10 @@
             <td>
               {% if r.run_id %}
                 <a class="btn" style="padding:6px 10px; white-space:nowrap;" href="/runs/{{ r.run_id }}">Open Run</a>
+                <a class="btn secondary" style="padding:6px 10px; white-space:nowrap; margin-left:6px;" href="/observability?app_id={{ r.app_id }}">Open App Observability</a>
               {% else %}
                 <span class="small">—</span>
+                <a class="btn secondary" style="padding:6px 10px; white-space:nowrap; margin-left:6px;" href="/observability?app_id={{ r.app_id }}">Open App Observability</a>
               {% endif %}
             </td>
             <td class="small">{{ r.note or '' }}</td>
@@ -279,7 +295,17 @@
       document.getElementById('promptInput').value = scenario.prompt;
       document.getElementById('scenarioDetails').classList.add('active');
     }
+
+    function refreshObservabilityLink() {
+      var appSel = document.getElementById('appIdSelect');
+      var btn = document.getElementById('openObsBtn');
+      if (!appSel || !btn) return;
+      var app = encodeURIComponent(appSel.value || '');
+      btn.href = '/observability?app_id=' + app;
+    }
+
+    document.getElementById('appIdSelect')?.addEventListener('change', refreshObservabilityLink);
+    refreshObservabilityLink();
   </script>
 </body>
 </html>
-

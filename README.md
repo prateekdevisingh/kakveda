@@ -45,7 +45,7 @@ This repository provides a **complete, production‑adjacent, single‑node impl
 
 ---
 
-## ✅ Latest Feature Rollup 
+## ✅ Latest Feature Rollup
 
 `(platform baseline delivered)`:
 - Failure Knowledge Base (GFKB), recurring pattern detection, pre-flight warning flow.
@@ -62,6 +62,18 @@ This repository provides a **complete, production‑adjacent, single‑node impl
   - incident timeline, forecast summary, correlation summary.
 - Detail pages + chart fallback rendering for environments where CDN chart scripts are blocked.
 - Dashboard-driven Netra runtime controls (observability toggle and config sync).
+
+`(day-before-yesterday + yesterday + today advanced observability additions)`:
+- Realtime service map UX upgrades: zoom/pan/fit/hover + topology density filters + demo mode.
+- Realtime service map page with dependency edges and environment filtering.
+- APM error tracking with grouped exceptions, workflow states, and replay context.
+- Continuous profiler view (method hotspots), version comparison, trace-to-profile drill-down.
+- Dynamic instrumentation controls (dashboard-managed runtime rules, no restart flow).
+- Instrumentation execution feedback timeline (agent-applied/failed/skipped ack).
+- Database monitoring (DBM): slow query hotspots, query fingerprints, wait/event insights, explain-plan payload support.
+- RUM (Real User Monitoring): frontend/web activity, LCP/FID/CLS, JS error visibility, RUM monitors + alerts.
+- Cross-telemetry correlation page: joins trace with RUM, infra snapshots, observability snapshots, DB samples, APM errors, and security signals.
+- APM monitors page: metric/trace/anomaly watchdog monitors with auto-generated defaults and alert lifecycle.
 
 ### Native Single Tool Positioning
 
@@ -93,7 +105,7 @@ This keeps integration simple:
 
 ## 💵 Direct Monthly Price Comparison (USD)
 
-> Pricing snapshot date: **February 28, 2026**. Values are public starting prices and can change by region, volume, and contract.
+> Pricing snapshot date: **March 1, 2026**. Values are public starting prices (or published billing models) and can change by region, volume, and contract.
 
 ### Infra Monitoring
 
@@ -124,6 +136,19 @@ This keeps integration simple:
 | Arize AI | Contact sales | custom |
 | MLflow OSS | $0 license/mo | Self-hosted |
 
+### Consolidated Requested Tool Matrix
+
+| Tool | Infra | Observability/APM | AI/LLM/Agent Monitoring | Public pricing visibility |
+|---|---:|---:|---:|---|
+| **Kakveda v1.0 + Netra** | **$0 license/mo** | **$0 license/mo** | **$0 license/mo** | OSS self-host |
+| Datadog | $15-$18 per host/mo | APM $31/host/mo; Logs $0.10/GB | LLM observability add-on model | Public list pricing |
+| Splunk AppDynamics | $6 per vCPU/mo | APM bundles from $33/vCPU/mo | Enterprise packaging path | Public starting tiers |
+| Logz.io | ~$12/mo equivalent entry | Logs/traces usage-based (published daily rates) | Agentic observability usage pricing | Public usage pricing |
+| LangSmith | N/A | N/A | $39/seat/mo (+ usage) | Public |
+| Arize | N/A | Product observability by plan | AX Pro $50/mo; OSS option exists | Public tiers/plan pages |
+| Azure Monitor | Usage-based | Usage-based per GB/retention | Integration-led via Azure stack | No single global flat monthly number |
+| MLflow OSS | N/A | N/A | $0 license/mo | OSS |
+
 Detailed matrix and notes: [docs/COMPARISON.md](docs/COMPARISON.md)
 
 Pricing sources:
@@ -134,6 +159,29 @@ Pricing sources:
 - LangSmith: https://www.langchain.com/pricing
 - Weights & Biases: https://wandb.ai/site/pricing
 - Arize AI: https://arize.com/pricing/
+- Azure Monitor: https://azure.microsoft.com/pricing/details/monitor/
+- MLflow: https://mlflow.org/
+
+---
+
+## 🌐 What Makes Kakveda Unique
+
+What many teams still do not operationalize well:
+- failure recurrence memory as a first-class data model,
+- pre-flight prevention signals before repeat incidents,
+- single-stack visibility across infra + observability + AI/LLM/agent runtime behavior.
+
+Kakveda’s unique combination:
+- durable failure knowledge base + warning-policy feedback loop,
+- one native host-side agent (`kakveda-netra`) for infra + container + k8s + observability push,
+- self-hosted governance-safe deployment with low setup friction.
+
+### Easy Setup (Practical)
+
+1. Start Kakveda: `docker compose up -d --build`
+2. Install Netra on host and provide dashboard API key.
+3. Run Netra (foreground/background/systemd).
+4. Verify signals in `/infra`, `/observability`, and `/observability/service-map`.
 
 ---
 

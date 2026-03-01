@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - APM Error Group</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 14px 20px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 18px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:0.8em; border:1px solid rgba(148,163,184,0.35); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--border2); padding: 8px; font-size: 0.9em; vertical-align: top; }
+    pre { white-space: pre-wrap; word-break: break-word; background: rgba(2,6,23,0.8); border:1px solid var(--border2); border-radius:8px; padding:10px; font-size:0.8em; color:#cbd5e1; max-height: 240px; overflow: auto; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>APM Error Group #{{ group.id }}</strong> <span class="small">{{ role }} - {{ email }}</span></div>
+    <div class="nav-links">
+      <a href="/observability">Observability</a>
+      <a href="/apm/errors">APM Errors</a>
+      <a href="/apm/pipeline">APM Pipeline</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    {% if message %}<div class="card" style="border-color: rgba(34,197,94,.45);">{{ message }}</div>{% endif %}
+    {% if error %}<div class="card" style="border-color: rgba(239,68,68,.45);">{{ error }}</div>{% endif %}
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Group Summary</h3>
+        <div class="small">Signature: <code>{{ group.signature }}</code></div>
+        <div class="small" style="margin-top:6px;">Type: <strong>{{ group.error_type }}</strong></div>
+        <div class="small" style="margin-top:6px;">Message: <strong>{{ group.error_message }}</strong></div>
+        <div class="small" style="margin-top:6px;">Service: <strong>{{ group.service_name or '-' }}</strong></div>
+        <div class="small" style="margin-top:6px;">App: <strong>{{ group.app_id }}</strong>, Env: <strong>{{ group.environment }}</strong></div>
+        <div class="small" style="margin-top:6px;">Handled: <strong>{% if group.handled %}yes{% else %}no{% endif %}</strong></div>
+        <div class="small" style="margin-top:6px;">Occurrences: <strong>{{ group.occurrence_count }}</strong></div>
+        <div class="small" style="margin-top:6px;">First seen: <strong>{{ group.first_seen_ts }}</strong></div>
+        <div class="small" style="margin-top:6px;">Last seen: <strong>{{ group.last_seen_ts }}</strong></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Workflow</h3>
+        <form method="post" action="/apm/errors/groups/{{ group.id }}/workflow">
+          {{ csrf_input(request) | safe }}
+          <div class="row">
+            <label class="small" for="workflow_status">Status</label>
+            <select id="workflow_status" name="workflow_status" class="btn secondary" style="padding:6px 10px; width:auto;">
+              <option value="open" {% if (group.workflow_status or '')=='open' %}selected{% endif %}>open</option>
+              <option value="ack" {% if (group.workflow_status or '')=='ack' %}selected{% endif %}>ack</option>
+              <option value="resolved" {% if (group.workflow_status or '')=='resolved' %}selected{% endif %}>resolved</option>
+              <option value="ignored" {% if (group.workflow_status or '')=='ignored' %}selected{% endif %}>ignored</option>
+            </select>
+          </div>
+          <div class="row" style="margin-top:8px;">
+            <label class="small" for="assignee">Assignee</label>
+            <input id="assignee" name="assignee" value="{{ group.assignee or '' }}" placeholder="name/email" style="max-width:300px;" />
+          </div>
+          <div class="row" style="margin-top:8px; align-items:flex-start;">
+            <label class="small" for="workflow_notes">Notes</label>
+            <textarea id="workflow_notes" name="workflow_notes" rows="4" style="max-width:520px;">{{ group.workflow_notes or '' }}</textarea>
+          </div>
+          <div style="margin-top:10px;"><button class="btn" type="submit" style="padding:7px 12px;">Update Workflow</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Exception Events (latest first)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Trace Run</th>
+            <th>Agent</th>
+            <th>Handled</th>
+            <th>Error</th>
+            <th>Stack Trace</th>
+            <th>Replay</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in events %}
+          <tr>
+            <td class="small">{{ e.ts }}</td>
+            <td>{% if e.trace_run_id %}<a href="/runs/{{ e.trace_run_id }}">{{ e.trace_run_id }}</a>{% else %}-{% endif %}</td>
+            <td>{{ e.agent_id }}</td>
+            <td>{% if e.handled %}yes{% else %}no{% endif %}</td>
+            <td>{{ (e.error_message or '')[:120] }}{% if (e.error_message or '')|length > 120 %}...{% endif %}</td>
+            <td>
+              {% if e.stack_trace %}
+              <details>
+                <summary class="small">view</summary>
+                <pre>{{ e.stack_trace }}</pre>
+              </details>
+              {% else %}
+              <span class="small">-</span>
+              {% endif %}
+            </td>
+            <td>
+              <button class="btn secondary replay-btn" type="button" data-event-id="{{ e.id }}" style="padding:6px 10px;">Replay Context</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="small">No events in this group.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Replay / Debug Context</h3>
+      <div class="small">Click any event row's <strong>Replay Context</strong> button. This returns sanitized debug context captured at ingest time.</div>
+      <pre id="replayOut">No replay context selected.</pre>
+    </div>
+  </div>
+
+  <script>
+    async function loadReplay(eventId) {
+      var out = document.getElementById('replayOut');
+      if (!out) return;
+      out.textContent = 'Loading event ' + eventId + '...';
+      try {
+        var res = await fetch('/api/apm/errors/replay/' + encodeURIComponent(eventId), { credentials: 'same-origin' });
+        var data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        out.textContent = 'Replay fetch failed: ' + (err && err.message ? err.message : 'unknown');
+      }
+    }
+
+    document.querySelectorAll('.replay-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        loadReplay(btn.getAttribute('data-event-id') || '');
+      });
+    });
+  </script>
+</body>
+</html>

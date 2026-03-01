@@ -42,6 +42,14 @@
       <a href="/">Dashboard</a>
       <a href="/infra">Infra</a>
       <a href="/observability" class="active">Observability</a>
+      <a href="/rum">RUM</a>
+      <a href="/apm/monitors">APM Monitors</a>
+      <a href="/observability/service-map">Service Map</a>
+      <a href="/apm/errors">APM Errors</a>
+      <a href="/profiling">Profiling</a>
+      <a href="/dbm">DBM</a>
+      <a href="/instrumentation">Instrumentation</a>
+      <a href="/apm/pipeline">APM Pipeline</a>
       <a href="/agents">Agents</a>
       <a href="/runs">Runs</a>
     </div>
@@ -90,6 +98,10 @@
         </select>
         <button class="btn" type="submit" style="padding:7px 14px;">Apply</button>
       </form>
+      <div class="row" style="margin-top:10px;">
+        <a class="btn secondary" href="/observability/service-map">Realtime Service Map</a>
+        <a class="btn secondary" href="/apm/errors">APM Error Tracking</a>
+      </div>
       <form method="post" action="/observability/toggle" class="row" style="margin-top:10px;">
         {{ csrf_input(request) | safe }}
         <input type="hidden" name="agent_name" value="{{ selected_agent }}" />
@@ -162,6 +174,20 @@
       </div>
     </div>
 
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Enterprise Parity Controls</h3>
+      <div class="small">Ecosystem depth: <strong>Service Map, APM Errors, DBM, Profiling, RUM, Monitors, Instrumentation, Correlation</strong>.</div>
+      <div class="small" style="margin-top:4px;">Managed scale: async ingest queue + batching, retention controls, topology density filters.</div>
+      <div class="small" style="margin-top:4px;">SLO maturity: error-budget burn-rate with latency/error/traffic/saturation trends.</div>
+      <div class="small" style="margin-top:4px;">Enterprise workflows: error-group lifecycle, instrumentation rule feedback, and trace drilldowns.</div>
+      <div class="row" style="margin-top:10px;">
+        <a class="btn secondary" href="/observability/service-map">Service Map</a>
+        <a class="btn secondary" href="/apm/errors">Error Workflow</a>
+        <a class="btn secondary" href="/apm/pipeline">Trace Pipeline</a>
+        <a class="btn secondary" href="/cross-correlation">Cross Correlation</a>
+      </div>
+    </div>
+
     {% if latest or k8s_info.enabled %}
     <div class="grid">
       <div class="card clickable-card" data-href="/observability/detail?metric=latency_current&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><a href="/observability/detail?metric=latency_current&agent_id={{ selected_agent }}&app_id={{ selected_app }}"><div class="small">Latency p95 (ms)</div><div class="value">{{ four_golden.latency_p95|round(2) }}</div></a></div>
@@ -222,7 +248,7 @@
         <tbody>
           {% for s in service_map_rows %}
           <tr>
-            <td><span class="pill">{{ s.app_id }}</span></td>
+            <td><a href="/observability/service?app_id={{ s.app_id }}&agent_id={{ s.agent_id }}"><span class="pill">{{ s.app_id }}</span></a></td>
             <td>{{ s.namespace or '-' }}</td>
             <td>{{ s.agent_id }}</td>
             <td>{{ s.samples }}</td>
@@ -234,6 +260,28 @@
           </tr>
           {% else %}
           <tr><td colspan="9" class="small">No service map rows available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">Auto Topology (Trace-derived)</h3>
+      <div class="small" style="margin-bottom:8px;">Source app to downstream service edges inferred from trace spans. Dense/interactive view: <a href="/observability/service-map">open Realtime Service Map</a>.</div>
+      <canvas id="topologyCanvas" height="260"></canvas>
+      <table>
+        <thead><tr><th>Source</th><th>Target</th><th>Calls</th><th>Latency Avg (ms)</th><th>Latency p95 (ms)</th></tr></thead>
+        <tbody>
+          {% for e in topology_edges %}
+          <tr>
+            <td>{{ e.source }}</td>
+            <td>{{ e.target }}</td>
+            <td>{{ e.count }}</td>
+            <td>{{ e.latency_avg_ms|round(2) }}</td>
+            <td>{{ e.latency_p95_ms|round(2) }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="small">No topology edges.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -605,6 +653,48 @@
     buildLineChart('satCpuChart', {{ sat_cpu_points | tojson }}, '#f59e0b', 'CPU Saturation', '%');
     buildLineChart('satMemChart', {{ sat_mem_points | tojson }}, '#8b5cf6', 'Memory Saturation', '%');
     buildLineChart('satDiskChart', {{ sat_disk_points | tojson }}, '#06b6d4', 'Disk Saturation', '%');
+
+    (function(){
+      var nodes = {{ topology_nodes | tojson }};
+      var edges = {{ topology_edges | tojson }};
+      var c = document.getElementById('topologyCanvas');
+      if (!c || !c.getContext || !nodes || !nodes.length) return;
+      var ctx = c.getContext('2d');
+      function draw(){
+        var dpr = window.devicePixelRatio || 1;
+        var cssW = Math.max(340, Math.floor(c.parentElement ? c.parentElement.clientWidth - 2 : 640));
+        var cssH = Math.max(220, Number(c.getAttribute('height') || 260));
+        c.width = Math.floor(cssW * dpr);
+        c.height = Math.floor(cssH * dpr);
+        c.style.width = cssW + 'px';
+        c.style.height = cssH + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, cssW, cssH);
+        var cx = cssW / 2, cy = cssH / 2, r = Math.min(cssW, cssH) * 0.34;
+        var pos = {};
+        nodes.forEach(function(n, i){
+          var a = (Math.PI * 2 * i) / Math.max(nodes.length, 1);
+          pos[n.id] = { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+        });
+        edges.slice(0, 60).forEach(function(e){
+          var a = pos[e.source], b = pos[e.target];
+          if (!a || !b) return;
+          ctx.strokeStyle = 'rgba(96,165,250,0.35)';
+          ctx.lineWidth = Math.max(1, Math.min(5, Number(e.count || 1)));
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        });
+        Object.keys(pos).forEach(function(id){
+          var p = pos[id];
+          ctx.fillStyle = 'rgba(34,197,94,0.9)';
+          ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#cbd5e1'; ctx.font = '10px sans-serif';
+          var label = String(id || '');
+          ctx.fillText(label.length > 32 ? (label.slice(0, 29) + '...') : label, p.x + 8, p.y + 3);
+        });
+      }
+      draw();
+      window.addEventListener('resize', draw);
+    })();
 
     document.querySelectorAll('.clickable-card').forEach(function(card) {
       card.addEventListener('click', function(ev) {

@@ -45,6 +45,7 @@ def _build_env_template(hostname: str) -> str:
         _env_line("AGENT_APP_ID", "host-infra").strip(),
         _env_line("AGENT_VERSION", "1.0.0").strip(),
         _env_line("AGENT_BASE_URL", f"http://{ip}:8120").strip(),
+        _env_line("AGENT_CAPABILITIES", "infra.metrics,observability.metrics,host.monitoring").strip(),
         "",
         _env_line("DASHBOARD_URL", "http://localhost:8110").strip(),
         _env_line("DASHBOARD_API_KEY", "replace-with-project-api-key").strip(),
@@ -102,7 +103,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("[netra] invalid DASHBOARD_API_KEY in env file")
         return 1
 
-    capabilities = ["infra.metrics", "host.monitoring"]
+    capabilities = ["infra.metrics", "observability.metrics", "host.monitoring"]
     agent = KakvedaAgent(capabilities=capabilities)
     print(
         "[netra] started "

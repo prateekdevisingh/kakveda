@@ -1,0 +1,510 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - Realtime Service Map</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { position: sticky; top: 0; z-index: 10; padding: 14px 20px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nav-links a { padding: 6px 12px; border-radius: 6px; font-size: 0.9em; }
+    .nav-links a:hover { background: rgba(37,99,235,0.15); text-decoration: none; }
+    .nav-links a.active { background: rgba(37,99,235,0.2); color: #60a5fa; }
+    .small { color: var(--muted); font-size: 0.88em; }
+    .wrap { max-width: 1600px; margin: 0 auto; padding: 18px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; background: rgba(37,99,235,0.12); border: 1px solid rgba(37,99,235,0.35); font-size: 0.82em; }
+    .grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--border2); padding: 8px; font-size: 0.9em; text-align: left; }
+    .canvas-wrap { position: relative; height: 620px; border-radius: 10px; border: 1px solid var(--border2); overflow: hidden; background: radial-gradient(circle at 20% 0%, rgba(59,130,246,0.1), transparent 60%), rgba(2,6,23,0.7); }
+    #mapCanvas { width: 100%; height: 100%; display: block; cursor: grab; }
+    #mapCanvas.dragging { cursor: grabbing; }
+    #mapTooltip { position: absolute; pointer-events: none; display: none; z-index: 2; min-width: 190px; max-width: 320px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border2); background: rgba(2, 6, 23, 0.96); color: #cbd5e1; font-size: 12px; line-height: 1.4; box-shadow: 0 8px 28px rgba(0,0,0,0.35); }
+    .canvas-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .legend { display: inline-flex; gap: 10px; align-items: center; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+    .kbd { border: 1px solid var(--border2); border-bottom-width: 2px; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: #93c5fd; }
+    @media (max-width: 1200px) {
+      .grid { grid-template-columns: 1fr; }
+      .canvas-wrap { height: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Realtime Service Map</strong> <span class="small">{{ role }} - {{ email }}</span></div>
+    <div class="nav-links">
+      <a href="/">Dashboard</a>
+      <a href="/observability">Observability</a>
+      <a href="/observability/service-map" class="active">Service Map</a>
+      <a href="/apm/errors">APM Errors</a>
+      <a href="/apm/pipeline">APM Pipeline</a>
+      <a href="/runs">Runs</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="row">
+        <label class="small" for="windowSec">Window</label>
+        <select id="windowSec" class="btn secondary" style="padding:6px 10px; width:auto;">
+          <option value="120">2 min</option>
+          <option value="300" selected>5 min</option>
+          <option value="900">15 min</option>
+          <option value="1800">30 min</option>
+          <option value="3600">60 min</option>
+        </select>
+        <label class="small" for="environment">Environment</label>
+        <select id="environment" class="btn secondary" style="padding:6px 10px; width:auto;">
+          <option value="">All</option>
+        </select>
+        <label class="small" for="minCalls">Min Calls</label>
+        <input id="minCalls" type="number" min="1" max="5000" step="1" value="1" class="btn secondary" style="padding:6px 10px; width:88px;" />
+        <label class="small" for="maxNodes">Max Nodes</label>
+        <input id="maxNodes" type="number" min="20" max="2000" step="20" value="300" class="btn secondary" style="padding:6px 10px; width:94px;" />
+        <label class="small" for="maxEdges">Max Edges</label>
+        <input id="maxEdges" type="number" min="20" max="5000" step="50" value="700" class="btn secondary" style="padding:6px 10px; width:94px;" />
+        <label class="small" for="demoData">Demo Data</label>
+        <select id="demoData" class="btn secondary" style="padding:6px 10px; width:auto;">
+          <option value="false" selected>Off</option>
+          <option value="true">On</option>
+        </select>
+        <button class="btn" id="refreshBtn" type="button" style="padding:7px 12px;">Refresh</button>
+        <span class="small" id="statsText">Loading...</span>
+      </div>
+      <div class="row" style="margin-top:8px; justify-content:space-between;">
+        <div class="legend small">
+          <span><span class="legend-dot" style="background:#22c55e;"></span> App</span>
+          <span><span class="legend-dot" style="background:#facc15;"></span> Service</span>
+          <span><span class="legend-dot" style="background:#60a5fa;"></span> Dependency Edge</span>
+        </div>
+        <div class="small">Pan: drag | Zoom: mouse wheel | Reset: <span class="kbd">R</span></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="canvas-wrap" id="canvasWrap">
+          <canvas id="mapCanvas"></canvas>
+          <div id="mapTooltip"></div>
+        </div>
+        <div class="canvas-actions">
+          <button class="btn secondary" id="fitBtn" type="button" style="padding:7px 12px;">Fit</button>
+          <button class="btn secondary" id="resetBtn" type="button" style="padding:7px 12px;">Reset View</button>
+          <button class="btn secondary" id="zoomInBtn" type="button" style="padding:7px 12px;">Zoom +</button>
+          <button class="btn secondary" id="zoomOutBtn" type="button" style="padding:7px 12px;">Zoom -</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top Dependencies</h3>
+        <table>
+          <thead><tr><th>Source</th><th>Target</th><th>Env</th><th>Calls</th><th>p95 ms</th></tr></thead>
+          <tbody id="edgesBody">
+            <tr><td colspan="5" class="small">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var envSelect = document.getElementById('environment');
+    var winSelect = document.getElementById('windowSec');
+    var minCallsInput = document.getElementById('minCalls');
+    var maxNodesInput = document.getElementById('maxNodes');
+    var maxEdgesInput = document.getElementById('maxEdges');
+    var demoDataSelect = document.getElementById('demoData');
+    var refreshBtn = document.getElementById('refreshBtn');
+    var fitBtn = document.getElementById('fitBtn');
+    var resetBtn = document.getElementById('resetBtn');
+    var zoomInBtn = document.getElementById('zoomInBtn');
+    var zoomOutBtn = document.getElementById('zoomOutBtn');
+    var statsText = document.getElementById('statsText');
+    var edgesBody = document.getElementById('edgesBody');
+    var canvasWrap = document.getElementById('canvasWrap');
+    var tooltip = document.getElementById('mapTooltip');
+    var canvas = document.getElementById('mapCanvas');
+    var ctx = canvas.getContext('2d');
+
+    var graphState = {
+      nodes: [],
+      edges: [],
+      positions: {},
+      bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+      viewport: { scale: 1, tx: 0, ty: 0 },
+      mouse: { x: 0, y: 0 },
+      hoverNode: null,
+      hoverEdge: null,
+      isDragging: false,
+      dragStart: { x: 0, y: 0, tx: 0, ty: 0 }
+    };
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function num(v, d) { var n = Number(v); return Number.isFinite(n) ? n : d; }
+
+    function resizeCanvas() {
+      if (!canvasWrap || !canvas) return;
+      var rect = canvasWrap.getBoundingClientRect();
+      var dpr = window.devicePixelRatio || 1;
+      var w = Math.max(280, Math.floor(rect.width));
+      var h = Math.max(220, Math.floor(rect.height));
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function computeLayout(nodes, edges) {
+      var byEnv = {};
+      nodes.forEach(function(n){
+        var env = n.environment || 'default';
+        if (!byEnv[env]) byEnv[env] = [];
+        byEnv[env].push(n);
+      });
+      var envs = Object.keys(byEnv);
+      var positions = {};
+      var canvasW = num(parseFloat(canvas.style.width), 980);
+      var canvasH = num(parseFloat(canvas.style.height), 620);
+      var worldW = Math.max(canvasW * 1.3, 900);
+      var worldH = Math.max(canvasH * 1.2, 620);
+      var yStep = worldH / Math.max(envs.length, 1);
+
+      envs.forEach(function(env, ei){
+        var arr = byEnv[env] || [];
+        var cols = Math.max(2, Math.ceil(Math.sqrt(arr.length)));
+        var rows = Math.max(1, Math.ceil(arr.length / cols));
+        var xPad = 80;
+        var yTop = yStep * ei + 40;
+        var laneW = Math.max(worldW - xPad * 2, 280);
+        var laneH = Math.max(yStep - 80, 120);
+        arr.forEach(function(n, idx){
+          var col = idx % cols;
+          var row = Math.floor(idx / cols);
+          var x = xPad + ((col + 0.5) / cols) * laneW;
+          var y = yTop + ((row + 0.5) / rows) * laneH;
+          positions[n.id] = {
+            id: n.id,
+            x: x,
+            y: y,
+            r: n.kind === 'app' ? 8 : 6,
+            label: n.service || n.id,
+            env: env,
+            kind: n.kind || 'app'
+          };
+        });
+      });
+
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      Object.keys(positions).forEach(function(k){
+        var p = positions[k];
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      });
+      if (!Number.isFinite(minX)) {
+        minX = 0; minY = 0; maxX = worldW; maxY = worldH;
+      }
+      return {
+        positions: positions,
+        bounds: { minX: minX - 40, maxX: maxX + 40, minY: minY - 40, maxY: maxY + 40 }
+      };
+    }
+
+    function fitView() {
+      var b = graphState.bounds;
+      var w = num(parseFloat(canvas.style.width), 980);
+      var h = num(parseFloat(canvas.style.height), 620);
+      var bw = Math.max(100, b.maxX - b.minX);
+      var bh = Math.max(100, b.maxY - b.minY);
+      var s = Math.min(w / bw, h / bh) * 0.9;
+      s = clamp(s, 0.25, 2.4);
+      graphState.viewport.scale = s;
+      graphState.viewport.tx = (w - bw * s) / 2 - b.minX * s;
+      graphState.viewport.ty = (h - bh * s) / 2 - b.minY * s;
+    }
+
+    function resetView() {
+      graphState.viewport.scale = 1;
+      graphState.viewport.tx = 0;
+      graphState.viewport.ty = 0;
+      fitView();
+      drawGraph();
+    }
+
+    function worldToScreen(x, y) {
+      var v = graphState.viewport;
+      return { x: x * v.scale + v.tx, y: y * v.scale + v.ty };
+    }
+
+    function screenToWorld(x, y) {
+      var v = graphState.viewport;
+      return { x: (x - v.tx) / v.scale, y: (y - v.ty) / v.scale };
+    }
+
+    function edgeDistance(px, py, ax, ay, bx, by) {
+      var vx = bx - ax, vy = by - ay;
+      var wx = px - ax, wy = py - ay;
+      var c1 = vx * wx + vy * wy;
+      if (c1 <= 0) return Math.hypot(px - ax, py - ay);
+      var c2 = vx * vx + vy * vy;
+      if (c2 <= 0) return Math.hypot(px - ax, py - ay);
+      var t = Math.min(1, c1 / c2);
+      var cx = ax + t * vx, cy = ay + t * vy;
+      return Math.hypot(px - cx, py - cy);
+    }
+
+    function drawGraph() {
+      if (!ctx) return;
+      var w = num(parseFloat(canvas.style.width), 980);
+      var h = num(parseFloat(canvas.style.height), 620);
+      ctx.clearRect(0, 0, w, h);
+
+      var nodes = graphState.nodes || [];
+      var edges = graphState.edges || [];
+      if (!nodes.length) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '14px sans-serif';
+        ctx.fillText('No dependency edges in selected realtime window.', 24, 40);
+        return;
+      }
+
+      var pos = graphState.positions;
+      var envSeen = {};
+      nodes.forEach(function(n){ envSeen[n.environment || 'default'] = true; });
+      var envs = Object.keys(envSeen);
+
+      envs.forEach(function(env){
+        var ys = [];
+        Object.keys(pos).forEach(function(k){ var p = pos[k]; if ((p.env || 'default') === env) ys.push(p.y); });
+        if (!ys.length) return;
+        var y0 = Math.min.apply(null, ys) - 26;
+        var y1 = Math.max.apply(null, ys) + 26;
+        var a = worldToScreen(graphState.bounds.minX, y0);
+        var b = worldToScreen(graphState.bounds.maxX, y1);
+        ctx.fillStyle = 'rgba(30,41,59,0.25)';
+        ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '11px sans-serif';
+        ctx.fillText('env: ' + env, a.x + 10, a.y + 14);
+      });
+
+      graphState.hoverEdge = null;
+      edges.forEach(function(e){
+        var a = pos[e.source], b = pos[e.target];
+        if (!a || !b) return;
+        var sa = worldToScreen(a.x, a.y);
+        var sb = worldToScreen(b.x, b.y);
+        var width = clamp(1 + (num(e.count, 1) / 10), 1, 7);
+        var alpha = clamp(0.2 + (num(e.count, 1) / 140), 0.22, 0.86);
+        var isHover = false;
+        if (graphState.mouse) {
+          var d = edgeDistance(graphState.mouse.x, graphState.mouse.y, sa.x, sa.y, sb.x, sb.y);
+          if (d < Math.max(5, width + 2)) {
+            isHover = true;
+            graphState.hoverEdge = e;
+          }
+        }
+        ctx.strokeStyle = isHover ? 'rgba(56,189,248,0.95)' : ('rgba(96,165,250,' + alpha.toFixed(3) + ')');
+        ctx.lineWidth = isHover ? Math.min(10, width + 2) : width;
+        ctx.beginPath();
+        ctx.moveTo(sa.x, sa.y);
+        ctx.lineTo(sb.x, sb.y);
+        ctx.stroke();
+      });
+
+      graphState.hoverNode = null;
+      Object.keys(pos).forEach(function(id){
+        var p = pos[id];
+        var sp = worldToScreen(p.x, p.y);
+        var r = Math.max(3, p.r * graphState.viewport.scale * 0.6);
+        var hovered = false;
+        if (graphState.mouse) {
+          var d = Math.hypot(graphState.mouse.x - sp.x, graphState.mouse.y - sp.y);
+          if (d <= r + 3) {
+            hovered = true;
+            graphState.hoverNode = p;
+          }
+        }
+        ctx.fillStyle = p.kind === 'app' ? 'rgba(34,197,94,0.95)' : 'rgba(250,204,21,0.95)';
+        if (hovered) ctx.fillStyle = 'rgba(56,189,248,1)';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, hovered ? r + 2 : r, 0, Math.PI * 2);
+        ctx.fill();
+        if (graphState.viewport.scale > 0.42 || hovered) {
+          ctx.fillStyle = '#cbd5e1';
+          ctx.font = '11px sans-serif';
+          var label = String(p.label || id);
+          ctx.fillText(label.length > 36 ? (label.slice(0, 33) + '...') : label, sp.x + 9, sp.y + 4);
+        }
+      });
+
+      renderTooltip();
+    }
+
+    function renderTooltip() {
+      if (!tooltip) return;
+      var n = graphState.hoverNode;
+      var e = graphState.hoverEdge;
+      if (n) {
+        tooltip.style.display = 'block';
+        tooltip.innerHTML = '<strong>' + String(n.label || n.id) + '</strong><br/>' +
+          'id: ' + String(n.id) + '<br/>' +
+          'kind: ' + String(n.kind) + '<br/>' +
+          'env: ' + String(n.env || '-');
+      } else if (e) {
+        tooltip.style.display = 'block';
+        tooltip.innerHTML = '<strong>Dependency</strong><br/>' +
+          String(e.source || '-') + ' → ' + String(e.target || '-') + '<br/>' +
+          'calls: ' + String(num(e.count, 0)) + '<br/>' +
+          'p95: ' + num(e.latency_p95_ms, 0).toFixed(2) + ' ms';
+      } else {
+        tooltip.style.display = 'none';
+        return;
+      }
+      var x = graphState.mouse.x + 14;
+      var y = graphState.mouse.y + 14;
+      var wrapRect = canvasWrap.getBoundingClientRect();
+      tooltip.style.left = Math.min(x, wrapRect.width - 250) + 'px';
+      tooltip.style.top = Math.min(y, wrapRect.height - 100) + 'px';
+    }
+
+    function fillEdges(edges) {
+      if (!edges || !edges.length) {
+        edgesBody.innerHTML = '<tr><td colspan="5" class="small">No edges in current window.</td></tr>';
+        return;
+      }
+      edgesBody.innerHTML = edges.slice(0, 180).map(function(e){
+        return '<tr>' +
+          '<td><span class="pill">' + (e.source || '-') + '</span></td>' +
+          '<td><span class="pill">' + (e.target || '-') + '</span></td>' +
+          '<td>' + (e.environment || '-') + '</td>' +
+          '<td>' + num(e.count, 0) + '</td>' +
+          '<td>' + num(e.latency_p95_ms, 0).toFixed(2) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function refillEnvOptions(envs, selected) {
+      var cur = selected || envSelect.value || '';
+      var html = '<option value="">All</option>';
+      (envs || []).forEach(function(e){ html += '<option value="' + e + '">' + e + '</option>'; });
+      envSelect.innerHTML = html;
+      envSelect.value = cur;
+    }
+
+    function buildUrl() {
+      var w = num(winSelect.value, 300);
+      var env = envSelect.value || '';
+      var minCalls = clamp(num(minCallsInput.value, 1), 1, 5000);
+      var maxNodes = clamp(num(maxNodesInput.value, 300), 20, 2000);
+      var maxEdges = clamp(num(maxEdgesInput.value, 700), 20, 5000);
+      minCallsInput.value = String(minCalls);
+      maxNodesInput.value = String(maxNodes);
+      maxEdgesInput.value = String(maxEdges);
+      var parts = [
+        'window_sec=' + encodeURIComponent(w),
+        'min_calls=' + encodeURIComponent(minCalls),
+        'max_nodes=' + encodeURIComponent(maxNodes),
+        'max_edges=' + encodeURIComponent(maxEdges),
+        'demo=' + encodeURIComponent(String((demoDataSelect && demoDataSelect.value) || 'false'))
+      ];
+      if (env) parts.push('environment=' + encodeURIComponent(env));
+      return '/api/service-map/realtime?' + parts.join('&');
+    }
+
+    async function refreshMap() {
+      var url = buildUrl();
+      try {
+        var res = await fetch(url, { credentials: 'same-origin' });
+        var data = await res.json();
+        if (!data || !data.ok) throw new Error((data && data.error) || 'request_failed');
+        refillEnvOptions(data.environments || [], envSelect.value || '');
+        graphState.nodes = data.nodes || [];
+        graphState.edges = data.edges || [];
+        var layout = computeLayout(graphState.nodes, graphState.edges);
+        graphState.positions = layout.positions;
+        graphState.bounds = layout.bounds;
+        fitView();
+        drawGraph();
+        fillEdges(graphState.edges);
+        var stats = (data.stats || {});
+        statsText.textContent =
+          'raw nodes=' + num(stats.raw_nodes, 0) +
+          ', raw edges=' + num(stats.raw_edges, 0) +
+          ', shown nodes=' + num(stats.returned_nodes, graphState.nodes.length) +
+          ', shown edges=' + num(stats.returned_edges, graphState.edges.length) +
+          ', window=' + String(data.window_sec || 300) + 's' +
+          (data.demo ? ', source=demo' : ', source=live');
+      } catch (err) {
+        statsText.textContent = 'Service map load failed: ' + (err && err.message ? err.message : 'unknown');
+      }
+    }
+
+    canvas.addEventListener('mousedown', function(ev){
+      graphState.isDragging = true;
+      canvas.classList.add('dragging');
+      graphState.dragStart = { x: ev.clientX, y: ev.clientY, tx: graphState.viewport.tx, ty: graphState.viewport.ty };
+    });
+    window.addEventListener('mouseup', function(){
+      graphState.isDragging = false;
+      canvas.classList.remove('dragging');
+    });
+    window.addEventListener('mousemove', function(ev){
+      var rect = canvas.getBoundingClientRect();
+      graphState.mouse.x = ev.clientX - rect.left;
+      graphState.mouse.y = ev.clientY - rect.top;
+      if (graphState.isDragging) {
+        graphState.viewport.tx = graphState.dragStart.tx + (ev.clientX - graphState.dragStart.x);
+        graphState.viewport.ty = graphState.dragStart.ty + (ev.clientY - graphState.dragStart.y);
+      }
+      drawGraph();
+    });
+
+    canvas.addEventListener('wheel', function(ev){
+      ev.preventDefault();
+      var rect = canvas.getBoundingClientRect();
+      var sx = ev.clientX - rect.left;
+      var sy = ev.clientY - rect.top;
+      var before = screenToWorld(sx, sy);
+      var factor = ev.deltaY < 0 ? 1.1 : 0.9;
+      graphState.viewport.scale = clamp(graphState.viewport.scale * factor, 0.15, 4.5);
+      var after = worldToScreen(before.x, before.y);
+      graphState.viewport.tx += sx - after.x;
+      graphState.viewport.ty += sy - after.y;
+      drawGraph();
+    }, { passive: false });
+
+    document.addEventListener('keydown', function(ev){
+      if (ev.key && ev.key.toLowerCase() === 'r') resetView();
+    });
+
+    refreshBtn.addEventListener('click', refreshMap);
+    winSelect.addEventListener('change', refreshMap);
+    envSelect.addEventListener('change', refreshMap);
+    minCallsInput.addEventListener('change', refreshMap);
+    maxNodesInput.addEventListener('change', refreshMap);
+    maxEdgesInput.addEventListener('change', refreshMap);
+    demoDataSelect.addEventListener('change', refreshMap);
+    fitBtn.addEventListener('click', function(){ fitView(); drawGraph(); });
+    resetBtn.addEventListener('click', resetView);
+    zoomInBtn.addEventListener('click', function(){ graphState.viewport.scale = clamp(graphState.viewport.scale * 1.2, 0.15, 4.5); drawGraph(); });
+    zoomOutBtn.addEventListener('click', function(){ graphState.viewport.scale = clamp(graphState.viewport.scale * 0.84, 0.15, 4.5); drawGraph(); });
+
+    window.addEventListener('resize', function(){
+      resizeCanvas();
+      var layout = computeLayout(graphState.nodes || [], graphState.edges || []);
+      graphState.positions = layout.positions;
+      graphState.bounds = layout.bounds;
+      fitView();
+      drawGraph();
+    });
+
+    resizeCanvas();
+    refreshMap();
+    setInterval(refreshMap, 5000);
+  </script>
+</body>
+</html>

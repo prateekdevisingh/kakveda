@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Kakveda - APM Monitors</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    header { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .wrap { padding:18px; display:grid; gap:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .small { color:var(--muted); font-size:.88em; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid var(--border2); padding:8px; font-size:.9em; }
+  </style>
+</head>
+<body>
+<header>
+  <div><strong>APM Monitors</strong> <span class="small">({{ role }} · {{ email }})</span></div>
+  <div><a href="/">Dashboard</a> · <a href="/observability">Observability</a> · <a href="/rum">RUM</a></div>
+</header>
+<div class="wrap">
+  {% if message %}<div class="card" style="border-color: rgba(34,197,94,.45);">{{ message }}</div>{% endif %}
+  {% if error %}<div class="card" style="border-color: rgba(239,68,68,.45);">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Add APM Monitor</h3>
+    <form method="post" action="/apm/monitors/add" class="row">
+      {{ csrf_input(request) | safe }}
+      <input name="name" placeholder="monitor name" style="max-width:180px;" />
+      <input name="app_id" placeholder="app (optional)" style="max-width:140px;" />
+      <input name="environment" placeholder="env (optional)" style="max-width:120px;" />
+      <select name="monitor_type" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="metric">metric</option><option value="trace">trace</option><option value="anomaly">anomaly/watchdog</option></select>
+      <select name="metric_name" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="error_rate_percent">error_rate_percent</option><option value="latency_p95_ms">latency_p95_ms</option><option value="trace_count">trace_count</option></select>
+      <select name="threshold_op" class="btn secondary" style="padding:6px 10px; width:auto;"><option value=">">&gt;</option><option value=">=">&gt;=</option><option value="<">&lt;</option><option value="<=">&lt;=</option></select>
+      <input name="threshold_value" value="5" style="max-width:90px;" />
+      <input name="window_minutes" value="15" style="max-width:90px;" />
+      <select name="enabled" class="btn secondary" style="padding:6px 10px; width:auto;"><option value="true">true</option><option value="false">false</option></select>
+      <button class="btn" type="submit" style="padding:7px 12px;">Add</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">Monitor Evaluation (metric + trace analytics + watchdog anomaly)</h3>
+    <table>
+      <thead><tr><th>Name</th><th>Type</th><th>Metric</th><th>Threshold</th><th>Observed</th><th>Samples</th><th>Breached</th><th>Severity</th><th>Scope</th></tr></thead>
+      <tbody>
+        {% for e in eval_rows %}
+        <tr>
+          <td>{{ e.monitor.name }}</td>
+          <td>{{ e.monitor.monitor_type }}</td>
+          <td>{{ e.monitor.metric_name }}</td>
+          <td>{{ e.monitor.threshold_op }} {{ e.monitor.threshold_value }}</td>
+          <td>{{ e.observed|round(3) }}</td>
+          <td>{{ e.samples }}</td>
+          <td><strong>{% if e.breached %}yes{% else %}no{% endif %}</strong></td>
+          <td>{{ e.severity }}</td>
+          <td>{{ e.monitor.app_id or '*' }} / {{ e.monitor.environment or '*' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="small">No APM monitors.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;">APM Alerts</h3>
+    <table>
+      <thead><tr><th>Time</th><th>Monitor</th><th>App</th><th>Metric</th><th>Observed</th><th>Threshold</th><th>Severity</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr><td>{{ a.ts }}</td><td>{{ a.monitor_name }}</td><td>{{ a.app_id or '-' }}</td><td>{{ a.metric_name }}</td><td>{{ a.observed_value|round(3) }}</td><td>{{ a.threshold_value|round(3) }}</td><td>{{ a.severity }}</td><td>{{ a.status }}</td></tr>
+        {% else %}
+        <tr><td colspan="8" class="small">No APM alerts.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

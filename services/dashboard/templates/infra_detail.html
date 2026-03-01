@@ -75,7 +75,7 @@
         <div class="small">CPU: <strong>{{ latest.cpu_percent_total|round(2) }}%</strong></div>
         <div class="small">Memory: <strong>{{ latest.memory_percent|round(2) }}%</strong></div>
         <div class="small">Load 1m: <strong>{{ latest.load_average_1m|round(2) }}</strong></div>
-        <div class="small">Docker Count: <strong>{{ latest.docker_count }}</strong></div>
+        <div class="small">Docker Count: <strong>{{ latest.docker_count_effective or latest.docker_count }}</strong></div>
       </div>
       <div class="card">
         <div class="small">Docker Diagnostics</div>
@@ -144,6 +144,96 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top CPU Processes</h3>
+        <table>
+          <thead>
+            <tr><th>PID</th><th>Name</th><th>CPU %</th><th>Memory %</th><th>RSS Bytes</th></tr>
+          </thead>
+          <tbody>
+            {% for p in top_cpu_processes %}
+            <tr>
+              <td>{{ p.pid or '-' }}</td>
+              <td>{{ p.name or '-' }}</td>
+              <td>{{ (p.cpu_percent or 0)|round(2) }}</td>
+              <td>{{ (p.memory_percent or 0)|round(2) }}</td>
+              <td>{{ (p.memory_rss_bytes or 0)|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No CPU process breakdown available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Top Memory Processes</h3>
+        <table>
+          <thead>
+            <tr><th>PID</th><th>Name</th><th>Memory %</th><th>CPU %</th><th>RSS Bytes</th></tr>
+          </thead>
+          <tbody>
+            {% for p in top_memory_processes %}
+            <tr>
+              <td>{{ p.pid or '-' }}</td>
+              <td>{{ p.name or '-' }}</td>
+              <td>{{ (p.memory_percent or 0)|round(2) }}</td>
+              <td>{{ (p.cpu_percent or 0)|round(2) }}</td>
+              <td>{{ (p.memory_rss_bytes or 0)|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No memory process breakdown available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Disk Partitions by Usage</h3>
+        <table>
+          <thead>
+            <tr><th>Mount</th><th>Used %</th><th>Used Bytes</th><th>Free Bytes</th><th>Total Bytes</th></tr>
+          </thead>
+          <tbody>
+            {% for d in top_disk_partitions %}
+            <tr>
+              <td>{{ d.mountpoint or '-' }}</td>
+              <td>{{ (d.disk_percent or 0)|round(2) }}</td>
+              <td>{{ (d.disk_used_bytes or 0)|int }}</td>
+              <td>{{ (d.disk_free_bytes or 0)|int }}</td>
+              <td>{{ (d.disk_total_bytes or 0)|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No disk partition data available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;">Network Interfaces by Throughput</h3>
+        <table>
+          <thead>
+            <tr><th>Interface</th><th>RX Bytes</th><th>TX Bytes</th><th>Packets RX/TX</th><th>Err/Drop</th></tr>
+          </thead>
+          <tbody>
+            {% for n in top_network_interfaces %}
+            <tr>
+              <td>{{ n.interface or '-' }}</td>
+              <td>{{ (n.net_bytes_recv or 0)|int }}</td>
+              <td>{{ (n.net_bytes_sent or 0)|int }}</td>
+              <td>{{ (n.net_packets_recv or 0)|int }} / {{ (n.net_packets_sent or 0)|int }}</td>
+              <td>{{ (n.net_errin or 0)|int }}/{{ (n.net_errout or 0)|int }}, {{ (n.net_dropin or 0)|int }}/{{ (n.net_dropout or 0)|int }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="small">No network interface data available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="grid2">

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import json
+import yaml
 import time
 import uuid
 import re
+import fnmatch
 from collections import defaultdict, deque
 from urllib.parse import quote
 import secrets
@@ -18,11 +21,11 @@ from pathlib import Path
 import logging
 
 import httpx
-from fastapi import Depends, FastAPI, Form, Request, Query
+from fastapi import Depends, FastAPI, Form, Request, Query, UploadFile, File
 import smtplib
 from email.message import EmailMessage
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from auth import create_access_token, decode_access_token, hash_password, new_reset_token, verify_password
@@ -40,6 +43,23 @@ from db import (
     Project,
     ProjectApiKey,
     ProjectBudget,
+    InfraDashboardLayout,
+    NetraAgentConfig,
+    TracePipelineConfig,
+    ProjectRetentionPolicy,
+    TraceSamplingRule,
+    SpanMetricConfig,
+    SpanMetricPoint,
+    APMErrorGroup,
+    APMErrorEvent,
+    ProfilerSample,
+    DynamicInstrumentationRule,
+    DynamicInstrumentationFeedback,
+    DBQuerySample,
+    RUMEvent,
+    RUMMonitor,
+    APMMonitor,
+    MonitorAlert,
     AgentRegistry,
     ProjectMember,
     Role,
@@ -130,6 +150,150 @@ def percentile(values: list[int], p: float) -> int:
     """Small helper for p50/p95 without numpy (demo-friendly)."""
     if not values:
         return 0
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _extract_infra_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize infra metrics event payload into {agent_id,timestamp,infra} shape."""
+    node_payload = raw.get("node_metrics_payload")
+    if isinstance(node_payload, dict) and isinstance(node_payload.get("infra"), dict):
+        return node_payload
+
+    infra = raw.get("infra")
+    if isinstance(infra, dict):
+        return {
+            "agent_id": str(raw.get("agent_id") or "unknown"),
+            "timestamp": str(raw.get("ts") or datetime.now(timezone.utc).isoformat()),
+            "infra": infra,
+        }
+    return {
+        "agent_id": str(raw.get("agent_id") or "unknown"),
+        "timestamp": str(raw.get("ts") or datetime.now(timezone.utc).isoformat()),
+        "infra": {},
+    }
+
+
+INFRA_UI_MAX_SNAPSHOTS = max(100, _to_int(os.environ.get("KAKVEDA_INFRA_UI_MAX_SNAPSHOTS"), 500))
+OBS_UI_MAX_SNAPSHOTS = max(100, _to_int(os.environ.get("KAKVEDA_OBS_UI_MAX_SNAPSHOTS"), 500))
+TRACE_ANALYTICS_MAX_RUNS = max(500, _to_int(os.environ.get("KAKVEDA_TRACE_ANALYTICS_MAX_RUNS"), 4000))
+INGEST_RETENTION_INTERVAL_SEC = max(60, _to_int(os.environ.get("KAKVEDA_INGEST_RETENTION_INTERVAL_SEC"), 300))
+INFRA_RETENTION_DAYS = max(1, _to_int(os.environ.get("KAKVEDA_INFRA_RETENTION_DAYS"), 14))
+OBS_RETENTION_DAYS = max(1, _to_int(os.environ.get("KAKVEDA_OBS_RETENTION_DAYS"), 14))
+TRACE_RETENTION_DAYS = max(1, _to_int(os.environ.get("KAKVEDA_TRACE_RETENTION_DAYS"), 30))
+INFRA_MAX_ROWS = max(1000, _to_int(os.environ.get("KAKVEDA_INFRA_MAX_ROWS"), 120000))
+OBS_MAX_ROWS = max(1000, _to_int(os.environ.get("KAKVEDA_OBS_MAX_ROWS"), 120000))
+TRACE_MAX_ROWS = max(1000, _to_int(os.environ.get("KAKVEDA_TRACE_MAX_ROWS"), 250000))
+_last_ingest_housekeeping_ts = 0.0
+METRICS_QUEUE_ENABLED = str(os.environ.get("KAKVEDA_METRICS_QUEUE_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+METRICS_QUEUE_MAXSIZE = max(1000, _to_int(os.environ.get("KAKVEDA_METRICS_QUEUE_MAXSIZE"), 10000))
+METRICS_BATCH_SIZE = max(10, _to_int(os.environ.get("KAKVEDA_METRICS_BATCH_SIZE"), 200))
+METRICS_BATCH_FLUSH_MS = max(50, _to_int(os.environ.get("KAKVEDA_METRICS_BATCH_FLUSH_MS"), 200))
+_metrics_queue: asyncio.Queue[dict[str, Any]] | None = None
+_metrics_worker_task: asyncio.Task[Any] | None = None
+
+
+def _delete_trace_runs_by_ids(s: Any, run_ids: list[int]) -> int:
+    if not run_ids:
+        return 0
+    s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+    s.query(RunFeedback).filter(RunFeedback.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+    s.query(ExperimentRun).filter(ExperimentRun.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+    s.query(EvaluationResult).filter(EvaluationResult.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+    return int(s.query(TraceRun).filter(TraceRun.id.in_(run_ids)).delete(synchronize_session=False) or 0)
+
+
+def _maybe_run_ingest_housekeeping(s: Any, *, force: bool = False) -> dict[str, int]:
+    global _last_ingest_housekeeping_ts
+    now_ts = time.time()
+    if not force and (now_ts - _last_ingest_housekeeping_ts) < float(INGEST_RETENTION_INTERVAL_SEC):
+        return {"deleted": 0}
+    _last_ingest_housekeeping_ts = now_ts
+
+    deleted_total = 0
+    now = datetime.now(timezone.utc)
+
+    def _retention_delete_filter(name_filter: Any, days: int) -> int:
+        cutoff = now - timedelta(days=max(1, days))
+        old_ids = [
+            int(r[0])
+            for r in (
+                s.query(TraceRun.id)
+                .filter(name_filter, TraceRun.ts < cutoff)
+                .order_by(TraceRun.ts.asc())
+                .limit(5000)
+                .all()
+            )
+        ]
+        return _delete_trace_runs_by_ids(s, old_ids)
+
+    def _cap_delete(name_filter: Any, cap: int) -> int:
+        total = int(s.query(TraceRun.id).filter(name_filter).count() or 0)
+        extra = total - max(0, cap)
+        if extra <= 0:
+            return 0
+        old_ids = [
+            int(r[0])
+            for r in (
+                s.query(TraceRun.id)
+                .filter(name_filter)
+                .order_by(TraceRun.ts.asc())
+                .limit(min(extra, 5000))
+                .all()
+            )
+        ]
+        return _delete_trace_runs_by_ids(s, old_ids)
+
+    # Global defaults for non-project-scoped rows.
+    deleted_total += _retention_delete_filter((TraceRun.name == "infra.metrics") & (TraceRun.project_id.is_(None)), INFRA_RETENTION_DAYS)
+    deleted_total += _retention_delete_filter((TraceRun.name == "observability.metrics") & (TraceRun.project_id.is_(None)), OBS_RETENTION_DAYS)
+    deleted_total += _cap_delete((TraceRun.name == "infra.metrics") & (TraceRun.project_id.is_(None)), INFRA_MAX_ROWS)
+    deleted_total += _cap_delete((TraceRun.name == "observability.metrics") & (TraceRun.project_id.is_(None)), OBS_MAX_ROWS)
+
+    trace_filter = (TraceRun.name != "infra.metrics") & (TraceRun.name != "observability.metrics")
+    deleted_total += _retention_delete_filter(trace_filter & (TraceRun.project_id.is_(None)), TRACE_RETENTION_DAYS)
+    deleted_total += _cap_delete(trace_filter & (TraceRun.project_id.is_(None)), TRACE_MAX_ROWS)
+
+    # Per-project retention/cap overrides.
+    policies = (
+        s.query(ProjectRetentionPolicy)
+        .filter(ProjectRetentionPolicy.enabled == True)  # noqa: E712
+        .all()
+    )
+    for pol in policies:
+        pid = _to_int(getattr(pol, "project_id", 0), 0)
+        if pid <= 0:
+            continue
+        pid_filter = TraceRun.project_id == pid
+        trace_days = max(1, _to_int(getattr(pol, "trace_retention_days", TRACE_RETENTION_DAYS), TRACE_RETENTION_DAYS))
+        trace_cap = max(1000, _to_int(getattr(pol, "trace_max_rows", TRACE_MAX_ROWS), TRACE_MAX_ROWS))
+        infra_days = max(1, _to_int(getattr(pol, "infra_retention_days", INFRA_RETENTION_DAYS), INFRA_RETENTION_DAYS))
+        infra_cap = max(1000, _to_int(getattr(pol, "infra_max_rows", INFRA_MAX_ROWS), INFRA_MAX_ROWS))
+        obs_days = max(1, _to_int(getattr(pol, "observability_retention_days", OBS_RETENTION_DAYS), OBS_RETENTION_DAYS))
+        obs_cap = max(1000, _to_int(getattr(pol, "observability_max_rows", OBS_MAX_ROWS), OBS_MAX_ROWS))
+
+        deleted_total += _retention_delete_filter((TraceRun.name == "infra.metrics") & pid_filter, infra_days)
+        deleted_total += _retention_delete_filter((TraceRun.name == "observability.metrics") & pid_filter, obs_days)
+        deleted_total += _cap_delete((TraceRun.name == "infra.metrics") & pid_filter, infra_cap)
+        deleted_total += _cap_delete((TraceRun.name == "observability.metrics") & pid_filter, obs_cap)
+        deleted_total += _retention_delete_filter(trace_filter & pid_filter, trace_days)
+        deleted_total += _cap_delete(trace_filter & pid_filter, trace_cap)
+
+    if deleted_total > 0:
+        s.add(AuditEvent(actor_email=None, action="ingest_housekeeping", details=f"deleted={deleted_total}"))
+    return {"deleted": int(deleted_total)}
 
 # Simple (demo-grade) pricing and token heuristics.
 # For Ollama we default cost=0 unless overridden by env.
@@ -262,12 +426,619 @@ def _require_project_api_key(request: Request) -> tuple[int, ProjectApiKey] | No
         row.last_used_at = utcnow()
         s.commit()
         return int(row.project_id), row
-    values = sorted(values)
-    if len(values) == 1:
-        return int(values[0])
-    idx = int(round((p / 100.0) * (len(values) - 1)))
-    idx = max(0, min(len(values) - 1, idx))
-    return int(values[idx])
+
+
+def _to_dt(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    txt = str(value or "").strip()
+    if not txt:
+        return None
+    try:
+        return datetime.fromisoformat(txt.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _pipeline_cfg_dict(cfg: TracePipelineConfig | None) -> dict[str, Any]:
+    return {
+        "enabled": bool(getattr(cfg, "enabled", True)),
+        "retention_days": max(1, _to_int(getattr(cfg, "retention_days", 14), 14)),
+        "default_sample_rate": max(0, min(100, _to_int(getattr(cfg, "default_sample_rate", 100), 100))),
+        "keep_error_traces": bool(getattr(cfg, "keep_error_traces", True)),
+        "drop_healthcheck_traces": bool(getattr(cfg, "drop_healthcheck_traces", True)),
+    }
+
+
+def _trace_seed(trace: dict[str, Any], app_id: str, agent_id: str) -> int:
+    raw = str(trace.get("trace_id") or "") + "|" + app_id + "|" + agent_id + "|" + str(trace.get("ts") or "")
+    h = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % 100
+
+
+def _pattern_match(value: str, pattern: str | None) -> bool:
+    p = (pattern or "").strip()
+    if not p:
+        return True
+    return fnmatch.fnmatch(value or "", p)
+
+
+def _trace_should_drop_by_sampling(
+    trace: dict[str, Any],
+    *,
+    app_id: str,
+    agent_id: str,
+    trace_name: str,
+    status: str,
+    duration_ms: int | None,
+    cfg: dict[str, Any],
+    rules: list[TraceSamplingRule],
+) -> tuple[bool, str, int]:
+    if not cfg.get("enabled", True):
+        return False, "pipeline_disabled", 100
+    if cfg.get("drop_healthcheck_traces", True):
+        nm = (trace_name or "").lower()
+        if "health" in nm or "heartbeat" in nm:
+            return True, "healthcheck_drop", 0
+
+    if cfg.get("keep_error_traces", True) and str(status).lower() == "error":
+        return False, "keep_error", 100
+
+    selected_rate = int(cfg.get("default_sample_rate", 100))
+    for rule in rules:
+        if not bool(rule.enabled):
+            continue
+        if not _pattern_match(app_id, rule.app_id_pattern):
+            continue
+        if not _pattern_match(trace_name, rule.name_pattern):
+            continue
+        if bool(rule.error_only) and str(status).lower() != "error":
+            continue
+        min_ms = _to_int(rule.min_duration_ms, 0)
+        if min_ms > 0 and _to_int(duration_ms, 0) < min_ms:
+            continue
+        selected_rate = max(0, min(100, _to_int(rule.sample_rate, selected_rate)))
+        break
+
+    if selected_rate >= 100:
+        return False, "sample_100", selected_rate
+    if selected_rate <= 0:
+        return True, "sample_0", selected_rate
+    seed = _trace_seed(trace, app_id, agent_id)
+    keep = seed < selected_rate
+    return (not keep), ("sample_drop" if not keep else "sample_keep"), selected_rate
+
+
+def _parse_trace_spans(trace: dict[str, Any], started: datetime | None, ended: datetime | None, duration_ms: int | None) -> list[dict[str, Any]]:
+    raw_spans = trace.get("spans") if isinstance(trace.get("spans"), list) else []
+    parsed: list[dict[str, Any]] = []
+    for i, sp in enumerate(raw_spans):
+        if not isinstance(sp, dict):
+            continue
+        st = _to_dt(sp.get("start_ts")) or started
+        et = _to_dt(sp.get("end_ts")) or ended
+        dms = _to_int(sp.get("duration_ms"), 0)
+        if dms <= 0 and st and et:
+            dms = max(1, int((et - st).total_seconds() * 1000))
+        parsed.append(
+            {
+                "idx": i,
+                "parent_idx": _to_int(sp.get("parent_idx"), -1),
+                "name": str(sp.get("name") or f"span-{i}"),
+                "start_ts": st or started or utcnow(),
+                "end_ts": et or ended or started or utcnow(),
+                "duration_ms": dms if dms > 0 else _to_int(duration_ms, 1),
+                "meta_json": json.dumps(sp.get("meta") if isinstance(sp.get("meta"), dict) else sp, ensure_ascii=False),
+            }
+        )
+    if parsed:
+        return parsed
+    # Fallback span for traces that don't provide nested spans.
+    return [
+        {
+            "idx": 0,
+            "parent_idx": -1,
+            "name": str(trace.get("name") or "trace.total"),
+            "start_ts": started or utcnow(),
+            "end_ts": ended or started or utcnow(),
+            "duration_ms": max(1, _to_int(duration_ms, 1)),
+            "meta_json": json.dumps({"fallback": True}, ensure_ascii=False),
+        }
+    ]
+
+
+def _span_target_service(span_name: str, meta_json: str, default: str = "") -> str:
+    try:
+        meta = json.loads(meta_json or "{}")
+    except Exception:
+        meta = {}
+    candidates = [
+        str(meta.get("target_service") or ""),
+        str(meta.get("service") or ""),
+        str(meta.get("upstream_service") or ""),
+        str(meta.get("downstream_service") or ""),
+    ]
+    for c in candidates:
+        v = c.strip()
+        if v:
+            return v
+    nm = str(span_name or "").strip()
+    if "." in nm:
+        left = nm.split(".", 1)[0].strip()
+        if left and left.lower() not in {"trace", "run", "span", "model", "playground"}:
+            return left
+    return default
+
+
+def _generate_span_metric_points(
+    s: Any,
+    *,
+    trace_run_id: int,
+    ts: datetime,
+    app_id: str,
+    spans: list[TraceSpan],
+) -> None:
+    cfgs = (
+        s.query(SpanMetricConfig)
+        .filter(SpanMetricConfig.enabled == True)  # noqa: E712
+        .order_by(SpanMetricConfig.name.asc())
+        .all()
+    )
+    if not cfgs:
+        return
+    for cfg in cfgs:
+        if cfg.app_id_pattern and not _pattern_match(app_id, cfg.app_id_pattern):
+            continue
+        matched = [sp for sp in spans if _pattern_match(str(sp.name or ""), cfg.span_name_pattern)]
+        if not matched:
+            continue
+        vals: list[float] = []
+        field = (cfg.field_name or "duration_ms").strip().lower()
+        for sp in matched:
+            if field == "duration_ms":
+                vals.append(float(_to_int(sp.duration_ms, 0)))
+            else:
+                try:
+                    m = json.loads(sp.meta_json or "{}")
+                except Exception:
+                    m = {}
+                vals.append(float(_to_float(m.get(field), 0.0)))
+        agg = (cfg.aggregation or "count").strip().lower()
+        if agg == "count":
+            value = float(len(matched))
+        elif agg == "avg":
+            value = float(sum(vals) / max(1, len(vals)))
+        elif agg == "max":
+            value = float(max(vals) if vals else 0.0)
+        elif agg == "p95":
+            v = sorted(vals)
+            value = float(v[max(0, int(len(v) * 0.95) - 1)] if v else 0.0)
+        else:
+            value = float(len(matched))
+        s.add(
+            SpanMetricPoint(
+                ts=ts,
+                metric_name=str(cfg.name),
+                app_id=app_id,
+                trace_run_id=int(trace_run_id),
+                value=value,
+            )
+        )
+
+
+def _extract_environment_from_trace(trace: dict[str, Any], env: dict[str, Any]) -> str:
+    vals = [
+        str(trace.get("environment") or ""),
+        str(trace.get("env_name") or ""),
+        str(env.get("environment") or ""),
+        str(env.get("env") or ""),
+    ]
+    for v in vals:
+        vv = v.strip()
+        if vv:
+            return vv
+    return "default"
+
+
+def _extract_environment_from_run(run: TraceRun) -> str:
+    try:
+        body = json.loads(run.output_json or "{}")
+    except Exception:
+        body = {}
+    trace = body.get("trace") if isinstance(body.get("trace"), dict) else {}
+    env = body.get("env") if isinstance(body.get("env"), dict) else {}
+    if not env and isinstance(trace.get("env"), dict):
+        env = trace.get("env")
+    return _extract_environment_from_trace(trace, env)
+
+
+def _normalize_error_type(error_text: str, stack_text: str) -> str:
+    et = str(error_text or "").strip()
+    if ":" in et:
+        left = et.split(":", 1)[0].strip()
+        if left:
+            return left[:128]
+    for line in str(stack_text or "").splitlines():
+        ln = line.strip()
+        if not ln:
+            continue
+        if ":" in ln:
+            left = ln.split(":", 1)[0].strip()
+            if left and len(left) <= 128 and " " not in left:
+                return left
+    return "error"
+
+
+def _error_signature(app_id: str, environment: str, service_name: str, error_type: str, error_message: str) -> str:
+    msg = re.sub(r"\d+", "<num>", str(error_message or "").strip().lower())
+    msg = re.sub(r"\s+", " ", msg)[:220]
+    raw = f"{app_id}|{environment}|{service_name}|{error_type}|{msg}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _upsert_apm_error(
+    s: Any,
+    *,
+    trace_run_id: int | None,
+    ts: datetime,
+    app_id: str,
+    agent_id: str,
+    service_name: str,
+    environment: str,
+    handled: bool,
+    error_message: str,
+    stack_trace: str,
+    replay_context: dict[str, Any],
+) -> int | None:
+    msg = str(error_message or "").strip()
+    if not msg:
+        return None
+    etype = _normalize_error_type(msg, stack_trace)
+    sig = _error_signature(app_id, environment, service_name, etype, msg)
+    grp = s.query(APMErrorGroup).filter(APMErrorGroup.signature == sig).first()
+    if not grp:
+        grp = APMErrorGroup(
+            signature=sig,
+            error_type=etype,
+            error_message=msg[:5000],
+            service_name=service_name or None,
+            app_id=app_id,
+            environment=environment,
+            handled=bool(handled),
+            occurrence_count=1,
+            workflow_status="open",
+            first_seen_ts=ts,
+            last_seen_ts=ts,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        s.add(grp)
+        s.flush()
+    else:
+        grp.occurrence_count = int(_to_int(grp.occurrence_count, 0) + 1)
+        grp.last_seen_ts = ts
+        grp.updated_at = utcnow()
+        grp.handled = bool(grp.handled or handled)
+
+    s.add(
+        APMErrorEvent(
+            ts=ts,
+            created_at=utcnow(),
+            error_group_id=int(grp.id),
+            trace_run_id=(int(trace_run_id) if trace_run_id is not None else None),
+            app_id=app_id,
+            agent_id=agent_id,
+            service_name=service_name or None,
+            environment=environment,
+            handled=bool(handled),
+            error_type=etype,
+            error_message=msg[:5000],
+            stack_trace=(str(stack_trace or "")[:20000] or None),
+            replay_context_json=json.dumps(replay_context or {}, ensure_ascii=False),
+        )
+    )
+    return int(grp.id)
+
+
+def _trace_version(trace: dict[str, Any], env: dict[str, Any]) -> str:
+    for v in [
+        str(trace.get("version") or ""),
+        str(env.get("version") or ""),
+        str((env.get("build") if isinstance(env.get("build"), dict) else {}).get("version") or ""),
+    ]:
+        vv = v.strip()
+        if vv:
+            return vv[:64]
+    return "unknown"
+
+
+def _sql_fingerprint(query: str) -> str:
+    txt = str(query or "").strip().lower()
+    txt = re.sub(r"'[^']*'", "?", txt)
+    txt = re.sub(r'"[^"]*"', "?", txt)
+    txt = re.sub(r"\b\d+\b", "?", txt)
+    txt = re.sub(r"\s+", " ", txt)[:1000]
+    return hashlib.sha256(txt.encode("utf-8")).hexdigest()
+
+
+def _compare_threshold(observed: float, op: str, threshold: float) -> bool:
+    o = str(op or ">").strip()
+    if o == ">=":
+        return observed >= threshold
+    if o == "<":
+        return observed < threshold
+    if o == "<=":
+        return observed <= threshold
+    return observed > threshold
+
+
+def _upsert_open_alert(
+    s: Any,
+    *,
+    source_type: str,
+    monitor_id: int,
+    monitor_name: str,
+    app_id: str | None,
+    environment: str | None,
+    severity: str,
+    metric_name: str,
+    observed_value: float,
+    threshold_value: float,
+    context: dict[str, Any],
+) -> None:
+    existing = (
+        s.query(MonitorAlert)
+        .filter(
+            MonitorAlert.source_type == source_type,
+            MonitorAlert.monitor_id == int(monitor_id),
+            MonitorAlert.status == "open",
+        )
+        .order_by(MonitorAlert.ts.desc(), MonitorAlert.id.desc())
+        .first()
+    )
+    if existing:
+        existing.ts = utcnow()
+        existing.observed_value = float(observed_value)
+        existing.threshold_value = float(threshold_value)
+        existing.context_json = json.dumps(context or {}, ensure_ascii=False)
+        existing.severity = severity
+        return
+    s.add(
+        MonitorAlert(
+            ts=utcnow(),
+            source_type=source_type,
+            monitor_id=int(monitor_id),
+            monitor_name=monitor_name,
+            app_id=(app_id or None),
+            environment=(environment or None),
+            severity=severity,
+            status="open",
+            metric_name=metric_name,
+            observed_value=float(observed_value),
+            threshold_value=float(threshold_value),
+            context_json=json.dumps(context or {}, ensure_ascii=False),
+        )
+    )
+
+
+def _resolve_open_alert(s: Any, *, source_type: str, monitor_id: int) -> None:
+    rows = (
+        s.query(MonitorAlert)
+        .filter(
+            MonitorAlert.source_type == source_type,
+            MonitorAlert.monitor_id == int(monitor_id),
+            MonitorAlert.status == "open",
+        )
+        .all()
+    )
+    for r in rows:
+        r.status = "resolved"
+
+
+def _ensure_dashboard_schema() -> None:
+    try:
+        migrate_db()
+    except Exception:
+        pass
+
+
+def _ensure_default_apm_monitors(s: Any) -> None:
+    defaults = [
+        ("auto-error-rate", "metric", "error_rate_percent", 5.0, ">"),
+        ("auto-latency-p95", "metric", "latency_p95_ms", 1200.0, ">"),
+        ("auto-watchdog-latency", "anomaly", "latency_p95_ms", 2.5, ">"),
+    ]
+    for name, mtype, metric, thr, op in defaults:
+        row = s.query(APMMonitor).filter(APMMonitor.name == name).first()
+        if row:
+            continue
+        s.add(
+            APMMonitor(
+                name=name,
+                app_id=None,
+                environment=None,
+                monitor_type=mtype,
+                metric_name=metric,
+                threshold_value=float(thr),
+                threshold_op=op,
+                window_minutes=15,
+                enabled=True,
+                auto_generated=True,
+                created_by="system",
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+
+
+def _evaluate_apm_monitor(s: Any, mon: APMMonitor) -> dict[str, Any]:
+    since = datetime.now(timezone.utc) - timedelta(minutes=max(1, _to_int(mon.window_minutes, 15)))
+    app_filter = str(mon.app_id or "").strip()
+    env_filter = str(mon.environment or "").strip()
+    metric = str(mon.metric_name or "error_rate_percent").strip()
+
+    q = s.query(TraceRun).filter(
+        TraceRun.ts >= since,
+        TraceRun.name != "infra.metrics",
+        TraceRun.name != "observability.metrics",
+    )
+    if app_filter:
+        q = q.filter(TraceRun.app_id == app_filter)
+    runs = q.order_by(TraceRun.ts.desc()).limit(5000).all()
+    if env_filter:
+        keep: list[TraceRun] = []
+        for r in runs:
+            if _extract_environment_from_run(r) == env_filter:
+                keep.append(r)
+        runs = keep
+
+    observed = 0.0
+    if metric == "error_rate_percent":
+        err = sum(1 for r in runs if str(r.status or "").lower() == "error")
+        observed = (float(err) / max(1.0, float(len(runs)))) * 100.0
+    elif metric == "latency_p95_ms":
+        ds = sorted([float(_to_int(r.duration_ms, 0)) for r in runs if _to_int(r.duration_ms, 0) > 0])
+        observed = float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0)
+    elif metric == "trace_count":
+        observed = float(len(runs))
+    else:
+        observed = float(len(runs))
+
+    if str(mon.monitor_type or "") == "anomaly":
+        # watchdog anomaly monitor: z-score-ish ratio vs previous window average
+        prev_since = since - timedelta(minutes=max(1, _to_int(mon.window_minutes, 15)))
+        prev_q = s.query(TraceRun).filter(
+            TraceRun.ts >= prev_since,
+            TraceRun.ts < since,
+            TraceRun.name != "infra.metrics",
+            TraceRun.name != "observability.metrics",
+        )
+        if app_filter:
+            prev_q = prev_q.filter(TraceRun.app_id == app_filter)
+        prev_runs = prev_q.order_by(TraceRun.ts.desc()).limit(5000).all()
+        if env_filter:
+            prev_runs = [r for r in prev_runs if _extract_environment_from_run(r) == env_filter]
+        prev_ds = [float(_to_int(r.duration_ms, 0)) for r in prev_runs if _to_int(r.duration_ms, 0) > 0]
+        prev_avg = (sum(prev_ds) / float(len(prev_ds))) if prev_ds else 0.0
+        observed = (observed / prev_avg) if prev_avg > 0 else 0.0
+
+    breached = _compare_threshold(float(observed), str(mon.threshold_op or ">"), float(mon.threshold_value or 0.0))
+    sev = "critical" if float(observed) >= float(mon.threshold_value or 0.0) * 2 else "warning"
+    return {
+        "breached": breached,
+        "observed": float(observed),
+        "samples": len(runs),
+        "severity": sev,
+    }
+
+def _persist_profiler_samples(
+    s: Any,
+    *,
+    trace_run_id: int,
+    ts: datetime,
+    app_id: str,
+    agent_id: str,
+    environment: str,
+    version: str,
+    trace_name: str,
+    spans: list[TraceSpan],
+) -> None:
+    # Continuous profiler (lightweight): convert span durations to hotspot samples.
+    if not spans:
+        return
+    for sp in spans:
+        method_name = str(sp.name or "unknown")
+        cpu_ms = float(_to_int(sp.duration_ms, 0))
+        s.add(
+            ProfilerSample(
+                ts=ts,
+                app_id=app_id,
+                agent_id=agent_id,
+                environment=environment,
+                service_name=str(trace_name or app_id or "service"),
+                method_name=method_name,
+                version=version or "unknown",
+                trace_run_id=int(trace_run_id),
+                sample_type="cpu",
+                cpu_ms=cpu_ms,
+                memory_bytes=0,
+                sample_count=1,
+                details_json=json.dumps({"source": "trace_span", "span_id": int(sp.id)}),
+            )
+        )
+
+        # Optional memory sample if present in span meta.
+        try:
+            meta = json.loads(sp.meta_json or "{}")
+        except Exception:
+            meta = {}
+        mem_b = _to_int(meta.get("memory_bytes"), 0)
+        if mem_b > 0:
+            s.add(
+                ProfilerSample(
+                    ts=ts,
+                    app_id=app_id,
+                    agent_id=agent_id,
+                    environment=environment,
+                    service_name=str(trace_name or app_id or "service"),
+                    method_name=method_name,
+                    version=version or "unknown",
+                    trace_run_id=int(trace_run_id),
+                    sample_type="memory",
+                    cpu_ms=0.0,
+                    memory_bytes=mem_b,
+                    sample_count=1,
+                    details_json=json.dumps({"source": "trace_span_meta", "span_id": int(sp.id)}),
+                )
+            )
+
+
+def _persist_db_query_samples(
+    s: Any,
+    *,
+    trace_run_id: int,
+    ts: datetime,
+    app_id: str,
+    agent_id: str,
+    environment: str,
+    trace_name: str,
+    spans: list[TraceSpan],
+) -> None:
+    for sp in spans:
+        try:
+            meta = json.loads(sp.meta_json or "{}")
+        except Exception:
+            meta = {}
+        if not isinstance(meta, dict):
+            continue
+        db_query = str(meta.get("db_query") or meta.get("query") or "").strip()
+        db_system = str(meta.get("db_system") or "").strip().lower()
+        if not db_query and db_system not in {"postgres", "mysql", "sqlite", "mongodb", "redis"}:
+            continue
+        if not db_query:
+            db_query = f"-- {sp.name}"
+        qtype = db_query.split(" ", 1)[0].strip().upper() if db_query else ""
+        qfp = _sql_fingerprint(db_query)
+        s.add(
+            DBQuerySample(
+                ts=ts,
+                app_id=app_id,
+                agent_id=agent_id,
+                environment=environment,
+                db_system=(db_system or "unknown"),
+                db_instance=str(meta.get("db_instance") or ""),
+                service_name=str(meta.get("service_name") or trace_name or app_id),
+                query_fingerprint=qfp,
+                query_text=db_query[:5000],
+                query_type=(qtype[:16] if qtype else None),
+                duration_ms=float(_to_int(sp.duration_ms, 0)),
+                rows_examined=_to_int(meta.get("rows_examined"), 0),
+                rows_returned=_to_int(meta.get("rows_returned"), 0),
+                wait_event=(str(meta.get("wait_event") or "")[:128] or None),
+                explain_plan_json=(json.dumps(meta.get("explain_plan")) if meta.get("explain_plan") is not None else None),
+                meta_json=json.dumps({"trace_run_id": int(trace_run_id), "span_name": str(sp.name or "")}),
+            )
+        )
 
 
 def env_url(name: str, default: str) -> str:
@@ -1352,6 +2123,8 @@ async def _subscribe_event_bus() -> None:
 
     - `trace.ingested` -> persists TraceRun rows (Runs page)
     - `child_safety_alert` -> persists WarningEvent rows (Warnings page)
+    - `infra.metrics` -> persists node-level infra snapshots (Infra page)
+    - `observability.metrics` -> persists observability snapshots (Observability page)
     """
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -1363,10 +2136,153 @@ async def _subscribe_event_bus() -> None:
                 f"{EVENT_BUS_URL}/subscribe",
                 json={"topic": "child_safety_alert", "callback_url": "http://dashboard:8110/events/child-safety"},
             )
+            await client.post(
+                f"{EVENT_BUS_URL}/subscribe",
+                json={"topic": "infra.metrics", "callback_url": "http://dashboard:8110/events/infra"},
+            )
+            await client.post(
+                f"{EVENT_BUS_URL}/subscribe",
+                json={"topic": "observability.metrics", "callback_url": "http://dashboard:8110/events/observability"},
+            )
         logger.info("event-bus subscriptions registered")
     except Exception as e:
         # don't fail dashboard startup if event-bus isn't ready yet
         logger.warning(f"event-bus subscription failed: {e}")
+
+
+def _persist_infra_event_row(s: Any, evt: dict[str, Any]) -> None:
+    payload = _extract_infra_payload(evt if isinstance(evt, dict) else {})
+    infra = payload.get("infra") if isinstance(payload.get("infra"), dict) else {}
+    app_id = str(evt.get("app_id") or "host-infra")
+    agent_id = str(payload.get("agent_id") or evt.get("agent_id") or "unknown")
+    collection_ms = _to_int(infra.get("collection_duration_ms"), 0)
+    tr = TraceRun(
+        scenario_run_id=None,
+        app_id=app_id,
+        agent_id=agent_id,
+        name="infra.metrics",
+        status="completed",
+        provider="system-probe",
+        model=None,
+        input_json=json.dumps(
+            {
+                "event_name": "infra.metrics",
+                "ts": payload.get("timestamp"),
+                "trace_id": evt.get("trace_id"),
+            }
+        ),
+        output_json=json.dumps({"infra_payload": payload, "event": evt}),
+        error=None,
+        duration_ms=collection_ms if collection_ms > 0 else None,
+    )
+    s.add(tr)
+
+
+def _persist_observability_event_row(s: Any, evt: dict[str, Any]) -> None:
+    obs_payload = evt.get("observability_payload") if isinstance(evt.get("observability_payload"), dict) else {}
+    if not obs_payload:
+        obs_payload = {
+            "agent_id": str(evt.get("agent_id") or "unknown"),
+            "timestamp": str(evt.get("ts") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")),
+            "observability": evt.get("observability") if isinstance(evt.get("observability"), dict) else {},
+        }
+    observability = obs_payload.get("observability") if isinstance(obs_payload.get("observability"), dict) else {}
+    app_id = str(evt.get("app_id") or "host-infra")
+    agent_id = str(obs_payload.get("agent_id") or evt.get("agent_id") or "unknown")
+    latency_current = _to_float(
+        ((observability.get("golden_signals") or {}).get("latency_ms") or {}).get("current"),
+        0.0,
+    )
+    duration_ms = int(latency_current) if latency_current > 0 else None
+    tr = TraceRun(
+        scenario_run_id=None,
+        app_id=app_id,
+        agent_id=agent_id,
+        name="observability.metrics",
+        status="completed",
+        provider="netra-observability",
+        model=None,
+        input_json=json.dumps(
+            {
+                "event_name": "observability.metrics",
+                "ts": obs_payload.get("timestamp"),
+                "trace_id": evt.get("trace_id"),
+            }
+        ),
+        output_json=json.dumps({"observability_payload": obs_payload, "event": evt}),
+        error=None,
+        duration_ms=duration_ms,
+    )
+    s.add(tr)
+
+
+async def _metrics_ingest_worker() -> None:
+    global _metrics_queue
+    if not _metrics_queue:
+        return
+    while True:
+        try:
+            first = await _metrics_queue.get()
+            batch = [first]
+            t0 = time.perf_counter()
+            while len(batch) < METRICS_BATCH_SIZE:
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                remaining = max(0.0, (float(METRICS_BATCH_FLUSH_MS) - elapsed_ms) / 1000.0)
+                if remaining <= 0:
+                    break
+                try:
+                    nxt = await asyncio.wait_for(_metrics_queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                batch.append(nxt)
+            with get_session() as s:
+                for item in batch:
+                    kind = str(item.get("kind") or "")
+                    evt = item.get("evt") if isinstance(item.get("evt"), dict) else {}
+                    if kind == "infra":
+                        _persist_infra_event_row(s, evt)
+                    elif kind == "observability":
+                        _persist_observability_event_row(s, evt)
+                _maybe_run_ingest_housekeeping(s)
+                s.commit()
+        except Exception as e:
+            logger.warning(f"metrics ingest worker batch failed: {e}")
+
+
+async def _enqueue_metrics_event(kind: str, evt: dict[str, Any]) -> bool:
+    global _metrics_queue
+    if not METRICS_QUEUE_ENABLED:
+        return False
+    if _metrics_queue is None:
+        _metrics_queue = asyncio.Queue(maxsize=METRICS_QUEUE_MAXSIZE)
+    try:
+        _metrics_queue.put_nowait({"kind": str(kind), "evt": dict(evt or {})})
+        return True
+    except Exception:
+        return False
+
+
+@app.on_event("startup")
+async def _start_metrics_worker() -> None:
+    global _metrics_queue, _metrics_worker_task
+    if not METRICS_QUEUE_ENABLED:
+        return
+    if _metrics_queue is None:
+        _metrics_queue = asyncio.Queue(maxsize=METRICS_QUEUE_MAXSIZE)
+    if _metrics_worker_task is None or _metrics_worker_task.done():
+        _metrics_worker_task = asyncio.create_task(_metrics_ingest_worker())
+
+
+@app.on_event("shutdown")
+async def _stop_metrics_worker() -> None:
+    global _metrics_worker_task
+    if _metrics_worker_task and not _metrics_worker_task.done():
+        _metrics_worker_task.cancel()
+        try:
+            await _metrics_worker_task
+        except Exception:
+            pass
+    _metrics_worker_task = None
 
 
 @app.post("/events/trace")
@@ -1379,28 +2295,153 @@ async def on_trace_ingested(trace: dict[str, Any]):
         response = str(trace.get("response") or "")
         model = str(trace.get("model") or "")
         env = trace.get("env") if isinstance(trace.get("env"), dict) else {}
+        trace_name = str(env.get("event_name") or trace.get("name") or "trace.ingested")
+        started = _to_dt(trace.get("start_ts")) or _to_dt(env.get("start_ts")) or _to_dt(trace.get("ts")) or utcnow()
+        ended = _to_dt(trace.get("end_ts")) or _to_dt(env.get("end_ts"))
+        environment = _extract_environment_from_trace(trace, env)
+        version = _trace_version(trace, env)
 
         status_raw = str(env.get("status") or "completed").lower()
         status = "error" if status_raw in {"error", "failed", "blocked"} else "completed"
         err = env.get("error")
+        stack_trace = str(env.get("stack_trace") or trace.get("stack_trace") or "")
+        handled_err = bool(env.get("handled_error") or trace.get("handled_error") or False)
+        duration_ms = int(env.get("duration_ms") or 0) if str(env.get("duration_ms") or "").isdigit() else None
+        if (duration_ms is None or duration_ms <= 0) and started and ended:
+            duration_ms = max(1, int((ended - started).total_seconds() * 1000))
 
         with get_session() as s:
+            cfg_row = s.query(TracePipelineConfig).order_by(TracePipelineConfig.updated_at.desc()).first()
+            cfg = _pipeline_cfg_dict(cfg_row)
+            sampling_rules = (
+                s.query(TraceSamplingRule)
+                .filter(TraceSamplingRule.enabled == True)  # noqa: E712
+                .order_by(TraceSamplingRule.priority.desc(), TraceSamplingRule.id.asc())
+                .all()
+            )
+            drop, drop_reason, sample_rate = _trace_should_drop_by_sampling(
+                trace,
+                app_id=app_id,
+                agent_id=agent_id,
+                trace_name=trace_name,
+                status=status,
+                duration_ms=duration_ms,
+                cfg=cfg,
+                rules=sampling_rules,
+            )
+            if drop:
+                s.add(
+                    AuditEvent(
+                        actor_email=None,
+                        action="trace_drop",
+                        details=f"app_id={app_id} agent_id={agent_id} reason={drop_reason} sample_rate={sample_rate}",
+                    )
+                )
+                s.commit()
+                return {"ok": True, "dropped": True, "reason": drop_reason, "sample_rate": sample_rate}
+
             tr = TraceRun(
                 scenario_run_id=None,
                 app_id=app_id,
                 agent_id=agent_id,
-                name=str(env.get("event_name") or "trace.ingested"),
+                name=trace_name,
                 status=status,
                 provider=str(env.get("provider") or ""),
                 model=model or None,
                 input_json=json.dumps({"prompt": prompt, "trace_id": trace.get("trace_id"), "ts": trace.get("ts")}),
                 output_json=json.dumps({"response": response, "env": env, "trace": trace}),
                 error=str(err) if err else None,
-                duration_ms=int(env.get("duration_ms") or 0) if str(env.get("duration_ms") or "").isdigit() else None,
+                duration_ms=duration_ms,
             )
             s.add(tr)
+            s.flush()
+
+            parsed_spans = _parse_trace_spans(trace, started=started, ended=ended, duration_ms=duration_ms)
+            db_spans: list[TraceSpan] = []
+            idx_to_id: dict[int, int] = {}
+            for row in parsed_spans:
+                parent_idx = _to_int(row.get("parent_idx"), -1)
+                parent_id = idx_to_id.get(parent_idx) if parent_idx >= 0 else None
+                sp = TraceSpan(
+                    trace_run_id=int(tr.id),
+                    parent_id=parent_id,
+                    name=str(row.get("name") or "span"),
+                    start_ts=_to_dt(row.get("start_ts")) or started or utcnow(),
+                    end_ts=_to_dt(row.get("end_ts")) or ended or started or utcnow(),
+                    duration_ms=max(1, _to_int(row.get("duration_ms"), 1)),
+                    meta_json=str(row.get("meta_json") or "{}"),
+                )
+                s.add(sp)
+                s.flush()
+                idx_to_id[_to_int(row.get("idx"), len(idx_to_id))] = int(sp.id)
+                db_spans.append(sp)
+
+            _generate_span_metric_points(
+                s,
+                trace_run_id=int(tr.id),
+                ts=started,
+                app_id=app_id,
+                spans=db_spans,
+            )
+            _persist_profiler_samples(
+                s,
+                trace_run_id=int(tr.id),
+                ts=started,
+                app_id=app_id,
+                agent_id=agent_id,
+                environment=environment,
+                version=version,
+                trace_name=trace_name,
+                spans=db_spans,
+            )
+            _persist_db_query_samples(
+                s,
+                trace_run_id=int(tr.id),
+                ts=started,
+                app_id=app_id,
+                agent_id=agent_id,
+                environment=environment,
+                trace_name=trace_name,
+                spans=db_spans,
+            )
+
+            # APM error tracking: automatic grouping + replay context capture.
+            if str(status).lower() == "error" or bool(err):
+                _upsert_apm_error(
+                    s,
+                    trace_run_id=int(tr.id),
+                    ts=started,
+                    app_id=app_id,
+                    agent_id=agent_id,
+                    service_name=str(trace_name or ""),
+                    environment=environment,
+                    handled=handled_err,
+                    error_message=str(err or trace.get("error") or "error"),
+                    stack_trace=stack_trace,
+                    replay_context={
+                        "trace_id": trace.get("trace_id"),
+                        "app_id": app_id,
+                        "agent_id": agent_id,
+                        "environment": environment,
+                        "trace_name": trace_name,
+                        "prompt": prompt,
+                        "response": response,
+                        "input_trace": trace,
+                        "env": env,
+                        "span_count": len(db_spans),
+                    },
+                )
+
+            s.add(
+                AuditEvent(
+                    actor_email=None,
+                    action="trace_ingested",
+                    details=f"run_id={tr.id} sample_rate={sample_rate}",
+                )
+            )
+            _maybe_run_ingest_housekeeping(s)
             s.commit()
-        return {"ok": True}
+        return {"ok": True, "dropped": False, "sample_rate": sample_rate}
     except Exception as e:
         logger.warning(f"trace ingest persist failed: {e}")
         return {"ok": False, "error": str(e)}
@@ -1449,6 +2490,40 @@ async def on_child_safety_alert(evt: dict[str, Any]):
         logger.warning(f"child safety persist failed: {e}")
         return {"ok": False, "error": str(e)}
         s.commit()
+
+
+@app.post("/events/infra")
+async def on_infra_metrics(evt: dict[str, Any]):
+    """Persist infra snapshots as TraceRun rows for infra monitoring UI."""
+    try:
+        queued = await _enqueue_metrics_event("infra", evt if isinstance(evt, dict) else {})
+        if queued:
+            return {"ok": True, "queued": True}
+        with get_session() as s:
+            _persist_infra_event_row(s, evt if isinstance(evt, dict) else {})
+            _maybe_run_ingest_housekeeping(s)
+            s.commit()
+        return {"ok": True, "queued": False}
+    except Exception as e:
+        logger.warning(f"infra metrics persist failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/events/observability")
+async def on_observability_metrics(evt: dict[str, Any]):
+    """Persist observability snapshots for observability dashboard UI."""
+    try:
+        queued = await _enqueue_metrics_event("observability", evt if isinstance(evt, dict) else {})
+        if queued:
+            return {"ok": True, "queued": True}
+        with get_session() as s:
+            _persist_observability_event_row(s, evt if isinstance(evt, dict) else {})
+            _maybe_run_ingest_housekeeping(s)
+            s.commit()
+        return {"ok": True, "queued": False}
+    except Exception as e:
+        logger.warning(f"observability metrics persist failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 @app.get("/projects", response_class=HTMLResponse)
 async def projects_list(request: Request, user: dict[str, Any] = Depends(require_login)):
@@ -1836,6 +2911,4019 @@ async def health_generate_test_event(
     )
 
 
+@app.get("/infra", response_class=HTMLResponse)
+async def infra_monitoring(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    agent_id: str | None = None,
+    q: str | None = None,
+    custom_metric: str | None = Query("cpu_percent_total"),
+    custom_metric_2: str | None = Query("memory_percent"),
+    cpu_threshold: str | None = Query(None),
+    memory_threshold: str | None = Query(None),
+    disk_threshold: str | None = Query(None),
+    load_threshold: str | None = Query(None),
+    temp_threshold: str | None = Query(None),
+    collection_ms_threshold: str | None = Query(None),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_agent = (agent_id or "").strip() or None
+    query_text = (q or "").strip().lower()
+    selected_project_id = _effective_project_id(request, user)
+
+    filter_keys = {
+        "agent_id",
+        "q",
+        "custom_metric",
+        "custom_metric_2",
+        "cpu_threshold",
+        "memory_threshold",
+        "disk_threshold",
+        "load_threshold",
+        "temp_threshold",
+        "collection_ms_threshold",
+    }
+    has_explicit_filters = any((request.query_params.get(k) or "").strip() != "" for k in filter_keys)
+    threshold_keys = {
+        "cpu_threshold",
+        "memory_threshold",
+        "disk_threshold",
+        "load_threshold",
+        "temp_threshold",
+        "collection_ms_threshold",
+    }
+    has_explicit_thresholds = any((request.query_params.get(k) or "").strip() != "" for k in threshold_keys)
+
+    with get_session() as s:
+        ql = s.query(InfraDashboardLayout).filter(InfraDashboardLayout.user_email == email)
+        if selected_project_id is None:
+            ql = ql.filter(InfraDashboardLayout.project_id.is_(None))
+        else:
+            ql = ql.filter((InfraDashboardLayout.project_id == selected_project_id) | (InfraDashboardLayout.project_id.is_(None)))
+        layout_rows = ql.order_by(InfraDashboardLayout.updated_at.desc()).all()
+
+    auto_threshold_configs: dict[str, dict[str, Any]] = {}
+    for r in layout_rows:
+        name_txt = str(r.name or "")
+        if not name_txt.startswith("__auto_thresholds__::"):
+            continue
+        cfg = json.loads(r.config_json or "{}") if isinstance(r.config_json, str) else {}
+        auto_threshold_configs[name_txt] = cfg if isinstance(cfg, dict) else {}
+
+    saved_layouts = [
+        {
+            "id": int(r.id),
+            "layout_uid": str(getattr(r, "layout_uid", "") or ""),
+            "name": str(r.name or ""),
+            "project_id": r.project_id,
+            "is_default": bool(r.is_default),
+            "config": json.loads(r.config_json or "{}") if isinstance(r.config_json, str) else {},
+        }
+        for r in layout_rows
+        if not str(r.name or "").startswith("__auto_thresholds__::")
+    ]
+    default_layout = next((l for l in saved_layouts if l.get("is_default")), None)
+    active_layout_name = ""
+    if (not has_explicit_filters) and default_layout and isinstance(default_layout.get("config"), dict):
+        c = default_layout["config"]
+        selected_agent = str(c.get("agent_id") or selected_agent or "").strip() or None
+        query_text = str(c.get("q") or query_text or "").strip().lower()
+        custom_metric = str(c.get("custom_metric") or custom_metric or "cpu_percent_total")
+        custom_metric_2 = str(c.get("custom_metric_2") or custom_metric_2 or "memory_percent")
+        cpu_threshold = str(c.get("cpu_threshold") if c.get("cpu_threshold") is not None else (cpu_threshold or ""))
+        memory_threshold = str(c.get("memory_threshold") if c.get("memory_threshold") is not None else (memory_threshold or ""))
+        disk_threshold = str(c.get("disk_threshold") if c.get("disk_threshold") is not None else (disk_threshold or ""))
+        load_threshold = str(c.get("load_threshold") if c.get("load_threshold") is not None else (load_threshold or ""))
+        temp_threshold = str(c.get("temp_threshold") if c.get("temp_threshold") is not None else (temp_threshold or ""))
+        collection_ms_threshold = str(
+            c.get("collection_ms_threshold") if c.get("collection_ms_threshold") is not None else (collection_ms_threshold or "")
+        )
+        active_layout_name = str(default_layout.get("name") or "")
+
+    auto_threshold_key = f"__auto_thresholds__::{selected_agent or '__all__'}"
+    auto_cfg = auto_threshold_configs.get(auto_threshold_key) if isinstance(auto_threshold_configs.get(auto_threshold_key), dict) else {}
+    if (not has_explicit_thresholds) and auto_cfg:
+        cpu_threshold = str(auto_cfg.get("cpu_threshold") if auto_cfg.get("cpu_threshold") is not None else (cpu_threshold or ""))
+        memory_threshold = str(auto_cfg.get("memory_threshold") if auto_cfg.get("memory_threshold") is not None else (memory_threshold or ""))
+        disk_threshold = str(auto_cfg.get("disk_threshold") if auto_cfg.get("disk_threshold") is not None else (disk_threshold or ""))
+        load_threshold = str(auto_cfg.get("load_threshold") if auto_cfg.get("load_threshold") is not None else (load_threshold or ""))
+        temp_threshold = str(auto_cfg.get("temp_threshold") if auto_cfg.get("temp_threshold") is not None else (temp_threshold or ""))
+        collection_ms_threshold = str(
+            auto_cfg.get("collection_ms_threshold") if auto_cfg.get("collection_ms_threshold") is not None else (collection_ms_threshold or "")
+        )
+
+    def _qfloat(value: str | None, default: float) -> float:
+        try:
+            raw = str(value).strip() if value is not None else ""
+            if raw == "":
+                return float(default)
+            return float(raw)
+        except Exception:
+            return float(default)
+
+    def _qint(value: str | None, default: int) -> int:
+        try:
+            raw = str(value).strip() if value is not None else ""
+            if raw == "":
+                return int(default)
+            return int(float(raw))
+        except Exception:
+            return int(default)
+
+    cpu_threshold_v = _qfloat(cpu_threshold, 85.0)
+    memory_threshold_v = _qfloat(memory_threshold, 85.0)
+    disk_threshold_v = _qfloat(disk_threshold, 90.0)
+    load_threshold_v = _qfloat(load_threshold, 1.2)
+    temp_threshold_v = _qfloat(temp_threshold, 85.0)
+    collection_ms_threshold_v = _qint(collection_ms_threshold, 500)
+    threshold_message_parts: list[str] = []
+
+    def _clamp_float(name: str, value: float, lo: float, hi: float) -> float:
+        if value < lo:
+            threshold_message_parts.append(f"{name} clamped to {lo}")
+            return float(lo)
+        if value > hi:
+            threshold_message_parts.append(f"{name} clamped to {hi}")
+            return float(hi)
+        return float(value)
+
+    def _clamp_int(name: str, value: int, lo: int, hi: int) -> int:
+        if value < lo:
+            threshold_message_parts.append(f"{name} clamped to {lo}")
+            return int(lo)
+        if value > hi:
+            threshold_message_parts.append(f"{name} clamped to {hi}")
+            return int(hi)
+        return int(value)
+
+    cpu_threshold_v = _clamp_float("cpu_threshold", cpu_threshold_v, 0.0, 100.0)
+    memory_threshold_v = _clamp_float("memory_threshold", memory_threshold_v, 0.0, 100.0)
+    disk_threshold_v = _clamp_float("disk_threshold", disk_threshold_v, 0.0, 100.0)
+    load_threshold_v = _clamp_float("load_threshold", load_threshold_v, 0.0, 20.0)
+    temp_threshold_v = _clamp_float("temp_threshold", temp_threshold_v, 0.0, 150.0)
+    collection_ms_threshold_v = _clamp_int("collection_ms_threshold", collection_ms_threshold_v, 1, 60000)
+    threshold_message = "; ".join(threshold_message_parts)
+
+    if has_explicit_thresholds:
+        auto_cfg_to_save = {
+            "agent_id": selected_agent or "",
+            "cpu_threshold": cpu_threshold_v,
+            "memory_threshold": memory_threshold_v,
+            "disk_threshold": disk_threshold_v,
+            "load_threshold": load_threshold_v,
+            "temp_threshold": temp_threshold_v,
+            "collection_ms_threshold": collection_ms_threshold_v,
+        }
+        with get_session() as s:
+            qauto = s.query(InfraDashboardLayout).filter(
+                InfraDashboardLayout.user_email == email,
+                InfraDashboardLayout.name == auto_threshold_key,
+            )
+            if selected_project_id is None:
+                qauto = qauto.filter(InfraDashboardLayout.project_id.is_(None))
+            else:
+                qauto = qauto.filter(InfraDashboardLayout.project_id == selected_project_id)
+            row = qauto.first()
+            if row:
+                row.updated_at = utcnow()
+                row.config_json = json.dumps(auto_cfg_to_save, ensure_ascii=True)
+            else:
+                row = InfraDashboardLayout(
+                    user_email=email,
+                    project_id=selected_project_id,
+                    layout_uid=f"infra-layout-{uuid.uuid4().hex[:12]}",
+                    name=auto_threshold_key,
+                    config_json=json.dumps(auto_cfg_to_save, ensure_ascii=True),
+                    is_default=False,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+                s.add(row)
+            s.commit()
+
+    def _parse_ts(ts: str | None) -> datetime | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _system_health(snapshot: dict[str, Any]) -> float:
+        cpu = _to_float(snapshot.get("cpu_percent_total"), 0.0)
+        mem = _to_float(snapshot.get("memory_percent"), 0.0)
+        load = _to_float(snapshot.get("load_average_1m"), 0.0)
+        swap = _to_float(snapshot.get("swap_percent"), 0.0)
+        disk_used = _to_float(snapshot.get("disk_used_percent"), 0.0)
+        zombie = _to_int(snapshot.get("process_zombie_count"), 0)
+        cpu_count = max(1, _to_int(snapshot.get("cpu_count_logical"), 1))
+        fd_open = _to_int(snapshot.get("open_file_descriptors"), 0)
+        fd_max = _to_int(snapshot.get("max_file_descriptors"), 0)
+        fd_ratio = (float(fd_open) / float(fd_max)) if fd_max > 0 else 0.0
+
+        penalty = 0.0
+        penalty += max(cpu - 85.0, 0.0) * 0.8
+        penalty += max(mem - 85.0, 0.0) * 0.8
+        penalty += max(disk_used - 90.0, 0.0) * 0.9
+        penalty += max(swap - 60.0, 0.0) * 0.5
+        penalty += max((load / float(cpu_count)) - 1.2, 0.0) * 25.0
+        penalty += min(float(zombie) * 2.0, 15.0)
+        penalty += max(fd_ratio - 0.8, 0.0) * 100.0
+        return max(0.0, min(100.0, 100.0 - penalty))
+
+    snapshots: list[dict[str, Any]] = []
+    filter_message = ""
+    with get_session() as s:
+        q = s.query(TraceRun).filter(TraceRun.name == "infra.metrics")
+        runs = q.order_by(TraceRun.ts.desc()).limit(INFRA_UI_MAX_SNAPSHOTS).all()
+
+        for run in runs:
+            try:
+                out = json.loads(run.output_json or "{}")
+            except Exception:
+                out = {}
+            payload = out.get("infra_payload")
+            if not isinstance(payload, dict):
+                payload = _extract_infra_payload(out.get("event") or {})
+            infra = payload.get("infra") if isinstance(payload.get("infra"), dict) else {}
+            cpu = infra.get("cpu") if isinstance(infra.get("cpu"), dict) else {}
+            memory = infra.get("memory") if isinstance(infra.get("memory"), dict) else {}
+            system = infra.get("system") if isinstance(infra.get("system"), dict) else {}
+            process = infra.get("process") if isinstance(infra.get("process"), dict) else {}
+            disk = infra.get("disk") if isinstance(infra.get("disk"), list) else []
+            network = infra.get("network") if isinstance(infra.get("network"), list) else []
+            docker = infra.get("docker") if isinstance(infra.get("docker"), list) else []
+            docker_error = str(infra.get("docker_error") or "").strip()
+            docker_socket_path = str(infra.get("docker_socket_path") or "").strip()
+            ts = str(payload.get("timestamp") or (run.ts.isoformat() if run.ts else ""))
+            disk_total = sum(_to_int(d.get("disk_total_bytes"), 0) for d in disk)
+            disk_used = sum(_to_int(d.get("disk_used_bytes"), 0) for d in disk)
+            disk_used_percent = (float(disk_used) / float(disk_total) * 100.0) if disk_total > 0 else 0.0
+            net_total_bytes = sum(_to_int(n.get("net_bytes_recv"), 0) + _to_int(n.get("net_bytes_sent"), 0) for n in network)
+            collection_ms = _to_int(infra.get("collection_duration_ms"), 0)
+            snapshots.append(
+                {
+                    "run_id": run.id,
+                    "agent_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "system_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "hostname": str(system.get("hostname") or ""),
+                    "app_id": str(run.app_id or "host-infra"),
+                    "ts": ts,
+                    "ts_dt": _parse_ts(ts),
+                    "cpu_percent_total": _to_float(cpu.get("cpu_percent_total"), 0.0),
+                    "cpu_count_logical": _to_int(cpu.get("cpu_count_logical"), 1),
+                    "memory_percent": _to_float(memory.get("memory_percent"), 0.0),
+                    "memory_used_bytes": _to_int(memory.get("memory_used_bytes"), 0),
+                    "memory_total_bytes": _to_int(memory.get("memory_total_bytes"), 0),
+                    "load_average_1m": _to_float(system.get("load_average_1m"), 0.0),
+                    "load_average_5m": _to_float(system.get("load_average_5m"), 0.0),
+                    "load_average_15m": _to_float(system.get("load_average_15m"), 0.0),
+                    "swap_percent": _to_float(memory.get("swap_percent"), 0.0),
+                    "open_file_descriptors": _to_int(system.get("open_file_descriptors"), 0),
+                    "max_file_descriptors": _to_int(system.get("max_file_descriptors"), 0),
+                    "uptime_seconds": _to_int(system.get("uptime_seconds"), 0),
+                    "cpu_temperature": _to_float(system.get("cpu_temperature"), 0.0),
+                    "gpu_temperature": _to_float(system.get("gpu_temperature"), 0.0),
+                    "process_total_count": _to_int(process.get("process_total_count"), 0),
+                    "process_running_count": _to_int(process.get("process_running_count"), 0),
+                    "process_zombie_count": _to_int(process.get("process_zombie_count"), 0),
+                    "top_5_cpu_processes": process.get("top_5_cpu_processes") if isinstance(process.get("top_5_cpu_processes"), list) else [],
+                    "top_5_memory_processes": process.get("top_5_memory_processes") if isinstance(process.get("top_5_memory_processes"), list) else [],
+                    "disk_used_bytes_total": disk_used,
+                    "disk_total_bytes_total": disk_total,
+                    "disk_used_percent": disk_used_percent,
+                    "net_total_bytes": net_total_bytes,
+                    "collection_duration_ms": collection_ms,
+                    "fd_utilization_percent": (float(_to_int(system.get("open_file_descriptors"), 0)) / float(max(1, _to_int(system.get("max_file_descriptors"), 1)))) * 100.0 if _to_int(system.get("max_file_descriptors"), 0) > 0 else 0.0,
+                    "disk": disk,
+                    "network": network,
+                    "docker": docker,
+                    "docker_error": docker_error,
+                    "docker_socket_path": docker_socket_path,
+                    "docker_count": len(docker),
+                    "docker_count_effective": len(docker),
+                    "raw": payload,
+                }
+            )
+
+        agents = [r[0] for r in s.query(TraceRun.agent_id).filter(TraceRun.name == "infra.metrics").distinct().order_by(TraceRun.agent_id.asc()).all() if r and r[0]]
+
+    base_snapshots = list(snapshots)
+    if selected_agent:
+        filtered_by_agent = [s for s in snapshots if str(s.get("agent_id") or "") == selected_agent]
+        if filtered_by_agent:
+            snapshots = filtered_by_agent
+        else:
+            filter_message = f"agent '{selected_agent}' had no data; showing all snapshots"
+            snapshots = base_snapshots
+
+    if query_text:
+        def _match(snap: dict[str, Any]) -> bool:
+            host = str(((snap.get("raw") or {}).get("infra") or {}).get("system", {}).get("hostname", "")).lower()
+            terms = [
+                str(snap.get("agent_id") or "").lower(),
+                str(snap.get("app_id") or "").lower(),
+                str(host),
+                str(snap.get("ts") or "").lower(),
+            ]
+            return any(query_text in t for t in terms)
+
+        filtered_by_query = [s for s in snapshots if _match(s)]
+        if filtered_by_query:
+            snapshots = filtered_by_query
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += f"query '{query_text}' returned no matches; showing current snapshot set"
+
+    # If latest docker poll times out, keep docker_count trend stable with the most recent known-good value.
+    for i, snap in enumerate(snapshots):
+        live_count = _to_int(snap.get("docker_count"), 0)
+        if live_count > 0:
+            snap["docker_count_effective"] = live_count
+            continue
+        sid = str(snap.get("system_id") or "unknown")
+        fallback = None
+        for prev in snapshots[i + 1 :]:
+            if str(prev.get("system_id") or "unknown") != sid:
+                continue
+            prev_count = _to_int(prev.get("docker_count"), 0)
+            if prev_count > 0:
+                fallback = prev
+                break
+        if fallback:
+            snap["docker_count_effective"] = _to_int(fallback.get("docker_count"), 0)
+            snap["docker_count_source"] = "fallback"
+        else:
+            snap["docker_count_effective"] = 0
+            snap["docker_count_source"] = "live"
+
+    latest = snapshots[0] if snapshots else None
+    trend_points = list(reversed(snapshots[:120]))
+    for p in snapshots:
+        p["system_health_score"] = _system_health(p)
+    for p in trend_points:
+        p["system_health_score"] = _system_health(p)
+
+    cpu_points = [{"ts": p["ts"], "value": p["cpu_percent_total"]} for p in trend_points]
+    mem_points = [{"ts": p["ts"], "value": p["memory_percent"]} for p in trend_points]
+    load_points = [{"ts": p["ts"], "value": p["load_average_1m"]} for p in trend_points]
+    health_points = [{"ts": p["ts"], "value": p["system_health_score"]} for p in trend_points]
+    disk_points = [{"ts": p["ts"], "value": p["disk_used_percent"]} for p in trend_points]
+    proc_points = [{"ts": p["ts"], "value": p["process_running_count"]} for p in trend_points]
+    collect_points = [{"ts": p["ts"], "value": p["collection_duration_ms"]} for p in trend_points]
+    fd_points = [{"ts": p["ts"], "value": p["fd_utilization_percent"]} for p in trend_points]
+    temp_points = [{"ts": p["ts"], "value": p["cpu_temperature"]} for p in trend_points]
+    swap_points = [{"ts": p["ts"], "value": p["swap_percent"]} for p in trend_points]
+    docker_points = [{"ts": p["ts"], "value": _to_int(p.get("docker_count_effective"), _to_int(p.get("docker_count"), 0))} for p in trend_points]
+
+    net_rate_points: list[dict[str, Any]] = []
+    prev = None
+    for p in trend_points:
+        rate = 0.0
+        if prev and p.get("ts_dt") and prev.get("ts_dt"):
+            dt = (p["ts_dt"] - prev["ts_dt"]).total_seconds()
+            if dt > 0:
+                delta = float(p.get("net_total_bytes", 0) - prev.get("net_total_bytes", 0))
+                rate = max(0.0, delta / dt)
+        net_rate_points.append({"ts": p["ts"], "value": rate})
+        prev = p
+
+    top_network = []
+    top_disk = []
+    latest_top_cpu_processes = []
+    latest_top_mem_processes = []
+    latest_docker = []
+    latest_docker_error = ""
+    latest_docker_socket_path = ""
+    all_containers: list[dict[str, Any]] = []
+    data_coverage = {}
+    time_data = {"has_time_data": False, "avg_interval_sec": 0.0, "snapshot_count": len(snapshots), "latest_age_sec": 0}
+    if latest:
+        top_network = sorted(
+            latest["network"],
+            key=lambda x: _to_int(x.get("net_bytes_recv"), 0) + _to_int(x.get("net_bytes_sent"), 0),
+            reverse=True,
+        )[:10]
+        top_disk = sorted(
+            latest["disk"],
+            key=lambda x: _to_int(x.get("disk_used_bytes"), 0),
+            reverse=True,
+        )[:10]
+        latest_top_cpu_processes = latest.get("top_5_cpu_processes") or []
+        latest_top_mem_processes = latest.get("top_5_memory_processes") or []
+        latest_docker = latest.get("docker") or []
+        latest_docker_error = str(latest.get("docker_error") or "").strip()
+        latest_docker_socket_path = str(latest.get("docker_socket_path") or "").strip()
+
+        # Aggregate docker containers from the latest snapshot of each system.
+        latest_by_system: dict[str, dict[str, Any]] = {}
+        for s_ in snapshots:
+            sid = str(s_.get("system_id") or "unknown")
+            if sid not in latest_by_system:
+                latest_by_system[sid] = s_
+        merged: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for sid, snap in latest_by_system.items():
+            host = str(snap.get("hostname") or "")
+            for c in (snap.get("docker") or []):
+                cname = str(c.get("container_name") or "unknown")
+                key = (sid, cname)
+                if key in seen:
+                    continue
+                seen.add(key)
+                net = c.get("container_net_io") if isinstance(c.get("container_net_io"), dict) else {}
+                blk = c.get("container_block_io") if isinstance(c.get("container_block_io"), dict) else {}
+                merged.append(
+                    {
+                        "system_id": sid,
+                        "hostname": host,
+                        "container_name": cname,
+                        "container_status": str(c.get("container_status") or ""),
+                        "container_cpu_percent": _to_float(c.get("container_cpu_percent"), 0.0),
+                        "container_memory_usage": _to_int(c.get("container_memory_usage"), 0),
+                        "container_memory_limit": _to_int(c.get("container_memory_limit"), 0),
+                        "container_restart_count": _to_int(c.get("container_restart_count"), 0),
+                        "net_rx_bytes": _to_int(net.get("rx_bytes"), 0),
+                        "net_tx_bytes": _to_int(net.get("tx_bytes"), 0),
+                        "blk_read_bytes": _to_int(blk.get("read_bytes"), 0),
+                        "blk_write_bytes": _to_int(blk.get("write_bytes"), 0),
+                    }
+                )
+        all_containers = sorted(
+            merged,
+            key=lambda x: (x.get("system_id") or "", x.get("container_name") or ""),
+        )
+
+        data_coverage = {
+            "cpu": bool(latest.get("cpu_percent_total") or latest.get("cpu_percent_total") == 0),
+            "memory": bool(latest.get("memory_total_bytes")),
+            "disk": bool(latest.get("disk")),
+            "network": bool(latest.get("network")),
+            "process": bool(latest.get("process_total_count") or latest.get("process_total_count") == 0),
+            "docker": "available" if len(latest_docker) > 0 else "none_or_unavailable",
+            "docker_error": latest_docker_error,
+            "docker_socket_path": latest_docker_socket_path,
+            "temperature": bool(latest.get("cpu_temperature") or latest.get("gpu_temperature")),
+            "fd": bool(latest.get("max_file_descriptors")),
+            "time_data": bool(latest.get("collection_duration_ms")),
+            "docker_count_live": _to_int(latest.get("docker_count"), 0),
+            "docker_count_effective": _to_int(latest.get("docker_count_effective"), _to_int(latest.get("docker_count"), 0)),
+        }
+
+        intervals = []
+        for i in range(1, len(trend_points)):
+            a = trend_points[i - 1].get("ts_dt")
+            b = trend_points[i].get("ts_dt")
+            if a and b:
+                d = (b - a).total_seconds()
+                if d > 0:
+                    intervals.append(d)
+        now = datetime.now(timezone.utc)
+        latest_dt = latest.get("ts_dt")
+        time_data = {
+            "has_time_data": any(_to_int(s.get("collection_duration_ms"), 0) > 0 for s in snapshots),
+            "avg_interval_sec": round(sum(intervals) / len(intervals), 2) if intervals else 0.0,
+            "snapshot_count": len(snapshots),
+            "latest_age_sec": int((now - latest_dt).total_seconds()) if latest_dt else 0,
+        }
+
+    alerts: list[dict[str, Any]] = []
+    if latest:
+        load_per_cpu = _to_float(latest.get("load_average_1m"), 0.0) / float(max(1, _to_int(latest.get("cpu_count_logical"), 1)))
+        checks = [
+            ("CPU", _to_float(latest.get("cpu_percent_total"), 0.0), cpu_threshold_v, "%"),
+            ("Memory", _to_float(latest.get("memory_percent"), 0.0), memory_threshold_v, "%"),
+            ("Disk", _to_float(latest.get("disk_used_percent"), 0.0), disk_threshold_v, "%"),
+            ("Load/Core", load_per_cpu, load_threshold_v, ""),
+            ("Temp(CPU)", _to_float(latest.get("cpu_temperature"), 0.0), temp_threshold_v, "C"),
+            ("Collection", float(_to_int(latest.get("collection_duration_ms"), 0)), float(collection_ms_threshold_v), "ms"),
+        ]
+        for name, value, thr, unit in checks:
+            if value > thr:
+                alerts.append(
+                    {
+                        "metric": name,
+                        "value": round(value, 2),
+                        "threshold": thr,
+                        "unit": unit,
+                        "system_id": str(latest.get("system_id") or ""),
+                        "hostname": str(latest.get("hostname") or ""),
+                    }
+                )
+
+    problems_by_system: dict[str, dict[str, Any]] = {}
+    for s_ in snapshots[:120]:
+        sid = str(s_.get("system_id") or "unknown")
+        host = str(s_.get("hostname") or "")
+        score = _to_float(s_.get("system_health_score"), 100.0)
+        breaches = 0
+        if _to_float(s_.get("cpu_percent_total"), 0.0) > cpu_threshold_v:
+            breaches += 1
+        if _to_float(s_.get("memory_percent"), 0.0) > memory_threshold_v:
+            breaches += 1
+        if _to_float(s_.get("disk_used_percent"), 0.0) > disk_threshold_v:
+            breaches += 1
+        load_pc = _to_float(s_.get("load_average_1m"), 0.0) / float(max(1, _to_int(s_.get("cpu_count_logical"), 1)))
+        if load_pc > load_threshold_v:
+            breaches += 1
+        if _to_float(s_.get("cpu_temperature"), 0.0) > temp_threshold_v:
+            breaches += 1
+        if _to_int(s_.get("collection_duration_ms"), 0) > collection_ms_threshold_v:
+            breaches += 1
+        if breaches <= 0:
+            continue
+        row = problems_by_system.get(sid)
+        if not row:
+            problems_by_system[sid] = {
+                "system_id": sid,
+                "hostname": host,
+                "breach_count": breaches,
+                "worst_health": score,
+                "latest_ts": s_.get("ts"),
+            }
+        else:
+            row["breach_count"] += breaches
+            row["worst_health"] = min(_to_float(row.get("worst_health"), 100.0), score)
+            if str(s_.get("ts") or "") > str(row.get("latest_ts") or ""):
+                row["latest_ts"] = s_.get("ts")
+    problematic_systems = sorted(
+        list(problems_by_system.values()),
+        key=lambda x: (int(x.get("breach_count") or 0), -_to_float(x.get("worst_health"), 100.0)),
+        reverse=True,
+    )[:20]
+
+    metric_series = {
+        "cpu_percent_total": cpu_points,
+        "memory_percent": mem_points,
+        "load_average_1m": load_points,
+        "disk_used_percent": disk_points,
+        "network_bytes_per_sec": net_rate_points,
+        "process_running_count": proc_points,
+        "collection_duration_ms": collect_points,
+        "fd_utilization_percent": fd_points,
+        "cpu_temperature": temp_points,
+        "swap_percent": swap_points,
+        "docker_count": docker_points,
+        "system_health_score": health_points,
+    }
+    metric_units = {
+        "cpu_percent_total": "%",
+        "memory_percent": "%",
+        "load_average_1m": "load",
+        "disk_used_percent": "%",
+        "network_bytes_per_sec": "B/s",
+        "process_running_count": "count",
+        "collection_duration_ms": "ms",
+        "fd_utilization_percent": "%",
+        "cpu_temperature": "C",
+        "swap_percent": "%",
+        "docker_count": "count",
+        "system_health_score": "score",
+    }
+    m1 = str(custom_metric or "cpu_percent_total")
+    m2 = str(custom_metric_2 or "memory_percent")
+    if m1 not in metric_series:
+        m1 = "cpu_percent_total"
+    if m2 not in metric_series:
+        m2 = "memory_percent"
+    custom_points = metric_series.get(m1, cpu_points)
+    custom_points_2 = metric_series.get(m2, mem_points)
+
+    thresholds = {
+        "cpu_threshold": cpu_threshold_v,
+        "memory_threshold": memory_threshold_v,
+        "disk_threshold": disk_threshold_v,
+        "load_threshold": load_threshold_v,
+        "temp_threshold": temp_threshold_v,
+        "collection_ms_threshold": collection_ms_threshold_v,
+    }
+
+    return templates.TemplateResponse(
+        "infra_monitoring.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "selected_agent": selected_agent or "",
+            "q": q or "",
+            "agent_choices": agents,
+            "thresholds": thresholds,
+            "alerts": alerts,
+            "problematic_systems": problematic_systems,
+            "custom_metric": m1,
+            "custom_metric_2": m2,
+            "metric_choices": list(metric_series.keys()),
+            "metric_units": metric_units,
+            "custom_points": custom_points,
+            "custom_points_2": custom_points_2,
+            "saved_layouts": saved_layouts,
+            "active_layout_name": active_layout_name,
+            "filter_message": filter_message,
+            "threshold_message": threshold_message,
+            "snapshot_count_total": len(base_snapshots),
+            "snapshot_count_filtered": len(snapshots),
+            "latest": latest,
+            "latest_docker_count_effective": _to_int((latest or {}).get("docker_count_effective"), _to_int((latest or {}).get("docker_count"), 0)),
+            "cpu_points": cpu_points,
+            "mem_points": mem_points,
+            "load_points": load_points,
+            "health_points": health_points,
+            "disk_points": disk_points,
+            "net_rate_points": net_rate_points,
+            "proc_points": proc_points,
+            "collect_points": collect_points,
+            "fd_points": fd_points,
+            "temp_points": temp_points,
+            "swap_points": swap_points,
+            "docker_points": docker_points,
+            "top_network": top_network,
+            "top_disk": top_disk,
+            "latest_top_cpu_processes": latest_top_cpu_processes,
+            "latest_top_mem_processes": latest_top_mem_processes,
+            "latest_docker": latest_docker,
+            "latest_docker_error": latest_docker_error,
+            "latest_docker_socket_path": latest_docker_socket_path,
+            "all_containers": all_containers,
+            "data_coverage": data_coverage,
+            "time_data": time_data,
+            "snapshots": snapshots[:80],
+        },
+    )
+
+
+@app.get("/infra/detail", response_class=HTMLResponse)
+async def infra_detail(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    metric: str | None = Query("docker_count"),
+    agent_id: str | None = None,
+    q: str | None = None,
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_agent = (agent_id or "").strip() or None
+    query_text = (q or "").strip().lower()
+
+    def _parse_ts(ts: str | None) -> datetime | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    snapshots: list[dict[str, Any]] = []
+    filter_message = ""
+    with get_session() as s:
+        runs = (
+            s.query(TraceRun)
+            .filter(TraceRun.name == "infra.metrics")
+            .order_by(TraceRun.ts.desc())
+            .limit(INFRA_UI_MAX_SNAPSHOTS)
+            .all()
+        )
+        for run in runs:
+            try:
+                out = json.loads(run.output_json or "{}")
+            except Exception:
+                out = {}
+            payload = out.get("infra_payload")
+            if not isinstance(payload, dict):
+                payload = _extract_infra_payload(out.get("event") or {})
+            infra = payload.get("infra") if isinstance(payload.get("infra"), dict) else {}
+            cpu = infra.get("cpu") if isinstance(infra.get("cpu"), dict) else {}
+            memory = infra.get("memory") if isinstance(infra.get("memory"), dict) else {}
+            system = infra.get("system") if isinstance(infra.get("system"), dict) else {}
+            process = infra.get("process") if isinstance(infra.get("process"), dict) else {}
+            disk = infra.get("disk") if isinstance(infra.get("disk"), list) else []
+            network = infra.get("network") if isinstance(infra.get("network"), list) else []
+            docker = infra.get("docker") if isinstance(infra.get("docker"), list) else []
+            ts = str(payload.get("timestamp") or (run.ts.isoformat() if run.ts else ""))
+            net_total_bytes = sum(_to_int(n.get("net_bytes_recv"), 0) + _to_int(n.get("net_bytes_sent"), 0) for n in network)
+            snapshots.append(
+                {
+                    "agent_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "system_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "hostname": str(system.get("hostname") or ""),
+                    "app_id": str(run.app_id or "host-infra"),
+                    "ts": ts,
+                    "ts_dt": _parse_ts(ts),
+                    "cpu_percent_total": _to_float(cpu.get("cpu_percent_total"), 0.0),
+                    "memory_percent": _to_float(memory.get("memory_percent"), 0.0),
+                    "load_average_1m": _to_float(system.get("load_average_1m"), 0.0),
+                    "disk_used_percent": _to_float(
+                        (sum(_to_int(d.get("disk_used_bytes"), 0) for d in disk) / float(max(1, sum(_to_int(d.get("disk_total_bytes"), 0) for d in disk)))) * 100.0
+                    ),
+                    "process_running_count": _to_int(process.get("process_running_count"), 0),
+                    "collection_duration_ms": _to_int(infra.get("collection_duration_ms"), 0),
+                    "fd_utilization_percent": (float(_to_int(system.get("open_file_descriptors"), 0)) / float(max(1, _to_int(system.get("max_file_descriptors"), 1)))) * 100.0 if _to_int(system.get("max_file_descriptors"), 0) > 0 else 0.0,
+                    "cpu_temperature": _to_float(system.get("cpu_temperature"), 0.0),
+                    "swap_percent": _to_float(memory.get("swap_percent"), 0.0),
+                    "docker_count": len(docker),
+                    "docker_count_effective": len(docker),
+                    "net_total_bytes": net_total_bytes,
+                    "docker": docker,
+                    "raw": payload,
+                }
+            )
+        agent_choices = [r[0] for r in s.query(TraceRun.agent_id).filter(TraceRun.name == "infra.metrics").distinct().order_by(TraceRun.agent_id.asc()).all() if r and r[0]]
+
+    base_snapshots = list(snapshots)
+    if selected_agent:
+        filtered_by_agent = [s for s in snapshots if str(s.get("agent_id") or "") == selected_agent]
+        if filtered_by_agent:
+            snapshots = filtered_by_agent
+        else:
+            filter_message = f"agent '{selected_agent}' had no data; showing all snapshots"
+            snapshots = base_snapshots
+    if query_text:
+        filtered_by_query = [
+            s
+            for s in snapshots
+            if query_text in str(s.get("agent_id") or "").lower()
+            or query_text in str(s.get("app_id") or "").lower()
+            or query_text in str(s.get("hostname") or "").lower()
+            or query_text in str(s.get("ts") or "").lower()
+        ]
+        if filtered_by_query:
+            snapshots = filtered_by_query
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += f"query '{query_text}' returned no matches; showing current snapshot set"
+
+    for i, snap in enumerate(snapshots):
+        live_count = _to_int(snap.get("docker_count"), 0)
+        if live_count > 0:
+            snap["docker_count_effective"] = live_count
+            continue
+        sid = str(snap.get("system_id") or "unknown")
+        fallback = None
+        for prev in snapshots[i + 1 :]:
+            if str(prev.get("system_id") or "unknown") != sid:
+                continue
+            prev_count = _to_int(prev.get("docker_count"), 0)
+            if prev_count > 0:
+                fallback = prev
+                break
+        if fallback:
+            snap["docker_count_effective"] = _to_int(fallback.get("docker_count"), 0)
+            snap["docker_count_source"] = "fallback"
+        else:
+            snap["docker_count_effective"] = 0
+            snap["docker_count_source"] = "live"
+
+    latest = snapshots[0] if snapshots else None
+    trend_points = list(reversed(snapshots[:120]))
+    net_rate_points: list[dict[str, Any]] = []
+    prev = None
+    for p in trend_points:
+        rate = 0.0
+        if prev and p.get("ts_dt") and prev.get("ts_dt"):
+            dt = (p["ts_dt"] - prev["ts_dt"]).total_seconds()
+            if dt > 0:
+                delta = float(p.get("net_total_bytes", 0) - prev.get("net_total_bytes", 0))
+                rate = max(0.0, delta / dt)
+        net_rate_points.append({"ts": p["ts"], "value": rate})
+        prev = p
+
+    metric_series = {
+        "docker_count": [{"ts": p["ts"], "value": _to_int(p.get("docker_count_effective"), _to_int(p.get("docker_count"), 0))} for p in trend_points],
+        "cpu_percent_total": [{"ts": p["ts"], "value": p["cpu_percent_total"]} for p in trend_points],
+        "memory_percent": [{"ts": p["ts"], "value": p["memory_percent"]} for p in trend_points],
+        "load_average_1m": [{"ts": p["ts"], "value": p["load_average_1m"]} for p in trend_points],
+        "disk_used_percent": [{"ts": p["ts"], "value": p["disk_used_percent"]} for p in trend_points],
+        "network_bytes_per_sec": net_rate_points,
+        "process_running_count": [{"ts": p["ts"], "value": p["process_running_count"]} for p in trend_points],
+        "collection_duration_ms": [{"ts": p["ts"], "value": p["collection_duration_ms"]} for p in trend_points],
+        "fd_utilization_percent": [{"ts": p["ts"], "value": p["fd_utilization_percent"]} for p in trend_points],
+        "cpu_temperature": [{"ts": p["ts"], "value": p["cpu_temperature"]} for p in trend_points],
+        "swap_percent": [{"ts": p["ts"], "value": p["swap_percent"]} for p in trend_points],
+    }
+    metric_units = {
+        "docker_count": "count",
+        "cpu_percent_total": "%",
+        "memory_percent": "%",
+        "load_average_1m": "load",
+        "disk_used_percent": "%",
+        "network_bytes_per_sec": "B/s",
+        "process_running_count": "count",
+        "collection_duration_ms": "ms",
+        "fd_utilization_percent": "%",
+        "cpu_temperature": "C",
+        "swap_percent": "%",
+    }
+    selected_metric = str(metric or "docker_count")
+    if selected_metric not in metric_series:
+        selected_metric = "docker_count"
+    metric_points = metric_series[selected_metric]
+
+    latest_infra = ((latest or {}).get("raw") or {}).get("infra") or {}
+    latest_cpu = latest_infra.get("cpu") if isinstance(latest_infra.get("cpu"), dict) else {}
+    latest_memory = latest_infra.get("memory") if isinstance(latest_infra.get("memory"), dict) else {}
+    latest_system = latest_infra.get("system") if isinstance(latest_infra.get("system"), dict) else {}
+    latest_process = latest_infra.get("process") if isinstance(latest_infra.get("process"), dict) else {}
+    latest_disk = latest_infra.get("disk") if isinstance(latest_infra.get("disk"), list) else []
+    latest_network = latest_infra.get("network") if isinstance(latest_infra.get("network"), list) else []
+    latest_docker = latest_infra.get("docker") if isinstance(latest_infra.get("docker"), list) else []
+    docker_error = str(latest_infra.get("docker_error") or "").strip()
+    docker_socket_path = str(latest_infra.get("docker_socket_path") or "").strip()
+    top_cpu_processes = latest_process.get("top_5_cpu_processes") if isinstance(latest_process.get("top_5_cpu_processes"), list) else []
+    top_memory_processes = latest_process.get("top_5_memory_processes") if isinstance(latest_process.get("top_5_memory_processes"), list) else []
+    top_disk_partitions = sorted(
+        [d for d in latest_disk if isinstance(d, dict)],
+        key=lambda d: (_to_float(d.get("disk_percent"), 0.0), _to_int(d.get("disk_used_bytes"), 0)),
+        reverse=True,
+    )[:10]
+    top_network_interfaces = sorted(
+        [n for n in latest_network if isinstance(n, dict)],
+        key=lambda n: (_to_int(n.get("net_bytes_recv"), 0) + _to_int(n.get("net_bytes_sent"), 0)),
+        reverse=True,
+    )[:10]
+
+    all_containers: list[dict[str, Any]] = []
+    latest_by_system: dict[str, dict[str, Any]] = {}
+    for s_ in snapshots:
+        sid = str(s_.get("system_id") or "unknown")
+        if sid not in latest_by_system:
+            latest_by_system[sid] = s_
+    for sid, snap in latest_by_system.items():
+        host = str(snap.get("hostname") or "")
+        for c in (snap.get("docker") or []):
+            net = c.get("container_net_io") if isinstance(c.get("container_net_io"), dict) else {}
+            blk = c.get("container_block_io") if isinstance(c.get("container_block_io"), dict) else {}
+            all_containers.append(
+                {
+                    "system_id": sid,
+                    "hostname": host,
+                    "container_name": str(c.get("container_name") or "unknown"),
+                    "container_status": str(c.get("container_status") or ""),
+                    "container_cpu_percent": _to_float(c.get("container_cpu_percent"), 0.0),
+                    "container_memory_usage": _to_int(c.get("container_memory_usage"), 0),
+                    "container_memory_limit": _to_int(c.get("container_memory_limit"), 0),
+                    "container_restart_count": _to_int(c.get("container_restart_count"), 0),
+                    "net_rx_bytes": _to_int(net.get("rx_bytes"), 0),
+                    "net_tx_bytes": _to_int(net.get("tx_bytes"), 0),
+                    "blk_read_bytes": _to_int(blk.get("read_bytes"), 0),
+                    "blk_write_bytes": _to_int(blk.get("write_bytes"), 0),
+                }
+            )
+    all_containers = sorted(all_containers, key=lambda x: (x.get("system_id") or "", x.get("container_name") or ""))
+
+    return templates.TemplateResponse(
+        "infra_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "selected_agent": selected_agent or "",
+            "q": q or "",
+            "agent_choices": agent_choices,
+            "selected_metric": selected_metric,
+            "metric_choices": list(metric_series.keys()),
+            "metric_units": metric_units,
+            "selected_metric_unit": str(metric_units.get(selected_metric) or "value"),
+            "metric_points": metric_points,
+            "latest": latest,
+            "latest_cpu": latest_cpu,
+            "latest_memory": latest_memory,
+            "latest_system": latest_system,
+            "latest_process": latest_process,
+            "latest_disk": latest_disk,
+            "latest_network": latest_network,
+            "latest_docker": latest_docker,
+            "top_cpu_processes": top_cpu_processes,
+            "top_memory_processes": top_memory_processes,
+            "top_disk_partitions": top_disk_partitions,
+            "top_network_interfaces": top_network_interfaces,
+            "all_containers": all_containers,
+            "docker_error": docker_error,
+            "docker_socket_path": docker_socket_path,
+            "snapshot_count": len(snapshots),
+            "filter_message": filter_message,
+            "latest_infra_json": json.dumps(latest_infra, indent=2, ensure_ascii=True) if latest_infra else "{}",
+        },
+    )
+
+
+@app.get("/observability", response_class=HTMLResponse)
+async def observability_view(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    agent_id: str | None = None,
+    app_id: str | None = None,
+    app_group: str | None = Query("all"),
+    namespace: str | None = Query(""),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_agent = (agent_id or "").strip() or None
+    selected_app = (app_id or "").strip() or None
+    selected_app_group = (app_group or "all").strip().lower() or "all"
+    selected_namespace = (namespace or "").strip()
+    message = str(request.query_params.get("message") or "")
+    error = str(request.query_params.get("error") or "")
+
+    def _build_topology(
+        rows: list[TraceRun],
+        spans_by_run: dict[int, list[TraceSpan]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        nodes: dict[str, dict[str, Any]] = {}
+        edge_rollup: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for tr in rows:
+            src = str(tr.app_id or "unknown")
+            nodes.setdefault(src, {"id": src, "kind": "app"})
+            for sp in spans_by_run.get(int(tr.id), []):
+                tgt = _span_target_service(str(sp.name or ""), str(sp.meta_json or ""), default="")
+                if not tgt or tgt == src:
+                    continue
+                nodes.setdefault(tgt, {"id": tgt, "kind": "service"})
+                key = (src, tgt)
+                cur = edge_rollup.get(key)
+                dur = float(_to_int(sp.duration_ms, 0))
+                if not cur:
+                    edge_rollup[key] = {"source": src, "target": tgt, "count": 1, "durations": [dur]}
+                else:
+                    cur["count"] += 1
+                    cur["durations"].append(dur)
+
+        edges: list[dict[str, Any]] = []
+        for _, v in edge_rollup.items():
+            ds = sorted(v["durations"])
+            edges.append(
+                {
+                    "source": v["source"],
+                    "target": v["target"],
+                    "count": int(v["count"]),
+                    "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                    "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+                }
+            )
+        edges.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+        node_rows = sorted(nodes.values(), key=lambda x: x["id"])
+        return node_rows[:200], edges[:500]
+
+    def _parse_ts(ts: str | None) -> datetime | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    obs_snaps: list[dict[str, Any]] = []
+    filter_message = ""
+    selected_agent_config: dict[str, Any] = {}
+
+    def _ns_from_app_id(aid: str) -> str:
+        txt = str(aid or "")
+        if txt.startswith("k8s:"):
+            parts = txt.split(":")
+            if len(parts) >= 3:
+                return parts[1]
+        return ""
+
+    with get_session() as s:
+        q = s.query(TraceRun).filter(TraceRun.name == "observability.metrics")
+        runs = q.order_by(TraceRun.ts.desc()).limit(OBS_UI_MAX_SNAPSHOTS).all()
+        for run in runs:
+            try:
+                out = json.loads(run.output_json or "{}")
+            except Exception:
+                out = {}
+            payload = out.get("observability_payload") if isinstance(out.get("observability_payload"), dict) else {}
+            obs = payload.get("observability") if isinstance(payload.get("observability"), dict) else {}
+            golden = obs.get("golden_signals") if isinstance(obs.get("golden_signals"), dict) else {}
+            latency = golden.get("latency_ms") if isinstance(golden.get("latency_ms"), dict) else {}
+            traffic = golden.get("traffic") if isinstance(golden.get("traffic"), dict) else {}
+            errors = golden.get("errors") if isinstance(golden.get("errors"), dict) else {}
+            saturation = golden.get("saturation") if isinstance(golden.get("saturation"), dict) else {}
+            apm = obs.get("apm") if isinstance(obs.get("apm"), dict) else {}
+            ts = str(payload.get("timestamp") or (run.ts.isoformat() if run.ts else ""))
+            obs_snaps.append(
+                {
+                    "ts": ts,
+                    "ts_dt": _parse_ts(ts),
+                    "agent_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "app_id": str(run.app_id or "unknown"),
+                    "namespace": _ns_from_app_id(str(run.app_id or "")),
+                    "latency_current": _to_float(latency.get("current"), 0.0),
+                    "latency_p95": _to_float(latency.get("p95"), 0.0),
+                    "traffic_rps": _to_float(traffic.get("requests_per_sec"), 0.0),
+                    "traffic_bps": _to_float(traffic.get("throughput_bps"), 0.0),
+                    "error_rate_percent": _to_float(errors.get("error_rate_percent"), 0.0),
+                    "error_count": _to_int(errors.get("error_count"), 0),
+                    "cpu_saturation": _to_float(saturation.get("cpu_percent"), 0.0),
+                    "memory_saturation": _to_float(saturation.get("memory_percent"), 0.0),
+                    "disk_saturation": _to_float(saturation.get("disk_percent"), 0.0),
+                    "load_per_core": _to_float(saturation.get("load_per_core"), 0.0),
+                    "fd_utilization_percent": _to_float(saturation.get("fd_utilization_percent"), 0.0),
+                    "apm": apm,
+                    "raw": payload,
+                }
+            )
+
+        agent_choices = [
+            r[0]
+            for r in s.query(TraceRun.agent_id)
+            .filter(TraceRun.name == "observability.metrics")
+            .distinct()
+            .order_by(TraceRun.agent_id.asc())
+            .all()
+            if r and r[0]
+        ]
+        app_choices = [
+            r[0]
+            for r in s.query(TraceRun.app_id)
+            .filter(TraceRun.name == "observability.metrics")
+            .distinct()
+            .order_by(TraceRun.app_id.asc())
+            .all()
+            if r and r[0]
+        ]
+        registered_agents = [
+            {"id": int(a.id), "name": str(a.name or ""), "base_url": str(a.base_url or ""), "enabled": bool(a.enabled)}
+            for a in s.query(AgentRegistry).filter(AgentRegistry.enabled == True).order_by(AgentRegistry.name.asc()).all()
+        ]
+        if selected_agent:
+            cfg_row = s.query(NetraAgentConfig).filter(NetraAgentConfig.agent_name == selected_agent).first()
+            if cfg_row and isinstance(cfg_row.config_json, str):
+                try:
+                    selected_agent_config = json.loads(cfg_row.config_json or "{}")
+                except Exception:
+                    selected_agent_config = {}
+
+    known_agents = sorted(set(agent_choices + [a["name"] for a in registered_agents]))
+    selected_agent_meta = next((a for a in registered_agents if a.get("name") == (selected_agent or "")), None)
+
+    base_obs_snaps = list(obs_snaps)
+    if selected_agent:
+        by_agent = [x for x in obs_snaps if str(x.get("agent_id") or "") == selected_agent]
+        if by_agent:
+            obs_snaps = by_agent
+        else:
+            filter_message = f"agent '{selected_agent}' had no observability rows; showing all rows"
+            obs_snaps = base_obs_snaps
+    if selected_app:
+        by_app = [x for x in obs_snaps if str(x.get("app_id") or "") == selected_app]
+        if by_app:
+            obs_snaps = by_app
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += f"app '{selected_app}' had no rows; keeping current set"
+
+    if selected_app_group == "k8s_only":
+        by_group = [x for x in obs_snaps if str(x.get("app_id") or "").startswith("k8s:")]
+        if by_group:
+            obs_snaps = by_group
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += "k8s_only filter had no rows; keeping current set"
+    elif selected_app_group == "non_k8s":
+        by_group = [x for x in obs_snaps if not str(x.get("app_id") or "").startswith("k8s:")]
+        if by_group:
+            obs_snaps = by_group
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += "non_k8s filter had no rows; keeping current set"
+    if selected_namespace:
+        by_ns = [x for x in obs_snaps if str(x.get("namespace") or "") == selected_namespace]
+        if by_ns:
+            obs_snaps = by_ns
+        else:
+            if filter_message:
+                filter_message += "; "
+            filter_message += f"namespace '{selected_namespace}' had no rows; keeping current set"
+
+    latest = obs_snaps[0] if obs_snaps else None
+    trend_points = list(reversed(obs_snaps[:120]))
+    latency_points = [{"ts": p["ts"], "value": p["latency_current"]} for p in trend_points]
+    traffic_points = [{"ts": p["ts"], "value": p["traffic_rps"]} for p in trend_points]
+    errors_points = [{"ts": p["ts"], "value": p["error_rate_percent"]} for p in trend_points]
+    sat_cpu_points = [{"ts": p["ts"], "value": p["cpu_saturation"]} for p in trend_points]
+    sat_mem_points = [{"ts": p["ts"], "value": p["memory_saturation"]} for p in trend_points]
+    sat_disk_points = [{"ts": p["ts"], "value": p["disk_saturation"]} for p in trend_points]
+
+    top_recent = obs_snaps[:100]
+    namespace_map: dict[str, dict[str, Any]] = {}
+    for p in top_recent:
+        ns = str(p.get("namespace") or "")
+        if not ns:
+            continue
+        row = namespace_map.get(ns)
+        if not row:
+            namespace_map[ns] = {
+                "namespace": ns,
+                "samples": 1,
+                "latency_sum": _to_float(p.get("latency_current"), 0.0),
+                "rps_sum": _to_float(p.get("traffic_rps"), 0.0),
+                "err_sum": _to_float(p.get("error_rate_percent"), 0.0),
+            }
+        else:
+            row["samples"] += 1
+            row["latency_sum"] += _to_float(p.get("latency_current"), 0.0)
+            row["rps_sum"] += _to_float(p.get("traffic_rps"), 0.0)
+            row["err_sum"] += _to_float(p.get("error_rate_percent"), 0.0)
+    namespace_rows = sorted(
+        [
+            {
+                "namespace": ns,
+                "samples": int(v["samples"]),
+                "latency_avg": float(v["latency_sum"]) / float(max(1, int(v["samples"]))),
+                "rps_avg": float(v["rps_sum"]) / float(max(1, int(v["samples"]))),
+                "error_avg": float(v["err_sum"]) / float(max(1, int(v["samples"]))),
+            }
+            for ns, v in namespace_map.items()
+        ],
+        key=lambda x: x["samples"],
+        reverse=True,
+    )
+    namespace_choices = sorted({str(x.get("namespace") or "") for x in obs_snaps if str(x.get("namespace") or "")})
+
+    four_golden = {
+        "latency_p50": _to_float(sorted([p["latency_current"] for p in top_recent])[max(0, int(len(top_recent) * 0.50) - 1)] if top_recent else 0.0),
+        "latency_p95": _to_float(sorted([p["latency_current"] for p in top_recent])[max(0, int(len(top_recent) * 0.95) - 1)] if top_recent else 0.0),
+        "latency_p99": _to_float(sorted([p["latency_current"] for p in top_recent])[max(0, int(len(top_recent) * 0.99) - 1)] if top_recent else 0.0),
+        "traffic_rps_avg": (sum(p["traffic_rps"] for p in top_recent) / float(len(top_recent))) if top_recent else 0.0,
+        "error_rate_avg": (sum(p["error_rate_percent"] for p in top_recent) / float(len(top_recent))) if top_recent else 0.0,
+        "cpu_sat_avg": (sum(p["cpu_saturation"] for p in top_recent) / float(len(top_recent))) if top_recent else 0.0,
+        "memory_sat_avg": (sum(p["memory_saturation"] for p in top_recent) / float(len(top_recent))) if top_recent else 0.0,
+        "disk_sat_avg": (sum(p["disk_saturation"] for p in top_recent) / float(len(top_recent))) if top_recent else 0.0,
+    }
+    slo_target_availability = 99.9
+    allowed_error_rate = max(0.0, 100.0 - slo_target_availability)
+    observed_error_rate = _to_float(four_golden.get("error_rate_avg"), 0.0)
+    burn_rate = (observed_error_rate / allowed_error_rate) if allowed_error_rate > 0 else 0.0
+    phase2_slo = {
+        "target_availability_percent": slo_target_availability,
+        "allowed_error_rate_percent": allowed_error_rate,
+        "observed_error_rate_percent": observed_error_rate,
+        "error_budget_remaining_percent": max(0.0, 100.0 - min(100.0, (burn_rate * 100.0))),
+        "burn_rate": burn_rate,
+        "status": "ok" if burn_rate <= 1.0 else ("warn" if burn_rate <= 2.0 else "bad"),
+    }
+
+    service_rollup: dict[str, dict[str, Any]] = {}
+    for p in top_recent:
+        app_key = str(p.get("app_id") or "unknown")
+        row = service_rollup.get(app_key)
+        if not row:
+            service_rollup[app_key] = {
+                "app_id": app_key,
+                "namespace": str(p.get("namespace") or ""),
+                "agent_id": str(p.get("agent_id") or ""),
+                "samples": 1,
+                "latency_sum": _to_float(p.get("latency_current"), 0.0),
+                "rps_sum": _to_float(p.get("traffic_rps"), 0.0),
+                "error_sum": _to_float(p.get("error_rate_percent"), 0.0),
+                "cpu_sum": _to_float(p.get("cpu_saturation"), 0.0),
+                "memory_sum": _to_float(p.get("memory_saturation"), 0.0),
+            }
+        else:
+            row["samples"] += 1
+            row["latency_sum"] += _to_float(p.get("latency_current"), 0.0)
+            row["rps_sum"] += _to_float(p.get("traffic_rps"), 0.0)
+            row["error_sum"] += _to_float(p.get("error_rate_percent"), 0.0)
+            row["cpu_sum"] += _to_float(p.get("cpu_saturation"), 0.0)
+            row["memory_sum"] += _to_float(p.get("memory_saturation"), 0.0)
+    service_map_rows = sorted(
+        [
+            {
+                "app_id": k,
+                "namespace": str(v.get("namespace") or ""),
+                "agent_id": str(v.get("agent_id") or ""),
+                "samples": int(v.get("samples") or 0),
+                "latency_avg": float(v.get("latency_sum") or 0.0) / float(max(1, int(v.get("samples") or 1))),
+                "rps_avg": float(v.get("rps_sum") or 0.0) / float(max(1, int(v.get("samples") or 1))),
+                "error_avg": float(v.get("error_sum") or 0.0) / float(max(1, int(v.get("samples") or 1))),
+                "cpu_avg": float(v.get("cpu_sum") or 0.0) / float(max(1, int(v.get("samples") or 1))),
+                "memory_avg": float(v.get("memory_sum") or 0.0) / float(max(1, int(v.get("samples") or 1))),
+            }
+            for k, v in service_rollup.items()
+        ],
+        key=lambda x: x["rps_avg"],
+        reverse=True,
+    )[:25]
+
+    # Use ingested traces as traces pillar proxy.
+    traces_summary = {"count_24h": 0, "error_count_24h": 0, "p95_duration_ms": 0.0}
+    topology_nodes: list[dict[str, Any]] = []
+    topology_edges: list[dict[str, Any]] = []
+    with get_session() as s:
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        tq = s.query(TraceRun).filter(TraceRun.ts >= since, TraceRun.name != "infra.metrics", TraceRun.name != "observability.metrics")
+        if selected_app:
+            tq = tq.filter(TraceRun.app_id == selected_app)
+        if selected_agent:
+            tq = tq.filter(TraceRun.agent_id == selected_agent)
+        traces = tq.order_by(TraceRun.ts.desc()).limit(TRACE_ANALYTICS_MAX_RUNS).all()
+        durations = [_to_float(t.duration_ms, 0.0) for t in traces if _to_float(t.duration_ms, 0.0) > 0]
+        traces_summary["count_24h"] = len(traces)
+        traces_summary["error_count_24h"] = sum(1 for t in traces if str(t.status or "").lower() == "error" or bool(t.error))
+        if durations:
+            d = sorted(durations)
+            traces_summary["p95_duration_ms"] = d[max(0, int(len(d) * 0.95) - 1)]
+        trace_ids = [int(t.id) for t in traces[:500] if getattr(t, "id", None) is not None]
+        spans_by_run: dict[int, list[TraceSpan]] = {}
+        if trace_ids:
+            span_rows = s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(trace_ids)).all()
+            for sp in span_rows:
+                spans_by_run.setdefault(int(sp.trace_run_id), []).append(sp)
+        topology_nodes, topology_edges = _build_topology(traces[:500], spans_by_run)
+
+    k8s_info: dict[str, Any] = {
+        "enabled": False,
+        "reason": "no_infra_snapshot",
+        "node_count": 0,
+        "pod_count_total": 0,
+        "pod_count_running": 0,
+        "namespace_count": 0,
+        "deployment_count": 0,
+        "configmap_count": 0,
+        "secret_count": 0,
+        "service_count": 0,
+        "nodes": [],
+        "pods": [],
+        "deployments": [],
+        "configmaps": [],
+        "secrets": [],
+        "services": [],
+    }
+    with get_session() as s:
+        iq = s.query(TraceRun).filter(TraceRun.name == "infra.metrics")
+        if selected_agent:
+            iq = iq.filter(TraceRun.agent_id == selected_agent)
+        ir = iq.order_by(TraceRun.ts.desc()).first()
+        if ir and isinstance(ir.output_json, str):
+            try:
+                out = json.loads(ir.output_json or "{}")
+            except Exception:
+                out = {}
+            p = out.get("infra_payload") if isinstance(out.get("infra_payload"), dict) else {}
+            if not p:
+                p = _extract_infra_payload(out.get("event") or {})
+            infra = p.get("infra") if isinstance(p.get("infra"), dict) else {}
+            kube = infra.get("kubernetes") if isinstance(infra.get("kubernetes"), dict) else {}
+            if kube:
+                k8s_info = {
+                    "enabled": bool(kube.get("enabled")),
+                    "reason": str(kube.get("reason") or ""),
+                    "node_count": _to_int(kube.get("node_count"), 0),
+                    "pod_count_total": _to_int(kube.get("pod_count_total"), 0),
+                    "pod_count_running": _to_int(kube.get("pod_count_running"), 0),
+                    "namespace_count": _to_int(kube.get("namespace_count"), 0),
+                    "deployment_count": _to_int(kube.get("deployment_count"), 0),
+                    "configmap_count": _to_int(kube.get("configmap_count"), 0),
+                    "secret_count": _to_int(kube.get("secret_count"), 0),
+                    "service_count": _to_int(kube.get("service_count"), 0),
+                    "nodes": (kube.get("nodes") if isinstance(kube.get("nodes"), list) else [])[:50],
+                    "pods": (kube.get("pods") if isinstance(kube.get("pods"), list) else [])[:120],
+                    "deployments": (kube.get("deployments") if isinstance(kube.get("deployments"), list) else [])[:120],
+                    "configmaps": (kube.get("configmaps") if isinstance(kube.get("configmaps"), list) else [])[:120],
+                    "secrets": (kube.get("secrets") if isinstance(kube.get("secrets"), list) else [])[:120],
+                    "services": (kube.get("services") if isinstance(kube.get("services"), list) else [])[:120],
+                }
+
+    k8s_app_rows: list[dict[str, Any]] = []
+    k8s_app_count_map: dict[str, int] = {}
+    for r in obs_snaps[:300]:
+        aid = str(r.get("app_id") or "")
+        if not aid.startswith("k8s:"):
+            continue
+        k8s_app_count_map[aid] = k8s_app_count_map.get(aid, 0) + 1
+    for aid, cnt in sorted(k8s_app_count_map.items(), key=lambda x: x[1], reverse=True):
+        parts = aid.split(":")
+        ns = parts[1] if len(parts) >= 3 else ""
+        appn = parts[2] if len(parts) >= 3 else aid
+        k8s_app_rows.append({"app_id": aid, "namespace": ns, "app_name": appn, "samples": cnt})
+
+    now_utc = datetime.now(timezone.utc)
+    latest_ts_dt = latest.get("ts_dt") if isinstance(latest, dict) else None
+    latest_age_seconds = int((now_utc - latest_ts_dt).total_seconds()) if isinstance(latest_ts_dt, datetime) else None
+    phase0_diagnostics = {
+        "status": "ok" if bool(latest) else "warn",
+        "latest_sample_age_seconds": latest_age_seconds,
+        "observability_rows": len(obs_snaps),
+        "chart_points": {
+            "latency": len(latency_points),
+            "traffic": len(traffic_points),
+            "errors": len(errors_points),
+            "cpu_saturation": len(sat_cpu_points),
+            "memory_saturation": len(sat_mem_points),
+            "disk_saturation": len(sat_disk_points),
+        },
+        "k8s_enabled": bool(k8s_info.get("enabled")),
+        "k8s_inventory": {
+            "nodes": _to_int(k8s_info.get("node_count"), 0),
+            "pods_total": _to_int(k8s_info.get("pod_count_total"), 0),
+            "deployments": _to_int(k8s_info.get("deployment_count"), 0),
+            "configmaps": _to_int(k8s_info.get("configmap_count"), 0),
+            "secrets": _to_int(k8s_info.get("secret_count"), 0),
+            "services": _to_int(k8s_info.get("service_count"), 0),
+        },
+        "traces_24h": _to_int(traces_summary.get("count_24h"), 0),
+    }
+    missing_signals: list[str] = []
+    if not latency_points:
+        missing_signals.append("latency")
+    if not traffic_points:
+        missing_signals.append("traffic")
+    if not errors_points:
+        missing_signals.append("errors")
+    if not sat_cpu_points:
+        missing_signals.append("cpu_saturation")
+    if not sat_mem_points:
+        missing_signals.append("memory_saturation")
+    if not sat_disk_points:
+        missing_signals.append("disk_saturation")
+    phase0_diagnostics["missing_signals"] = missing_signals
+
+    # Phase 3: incident timeline, synthetic checks, forecast, and correlation.
+    incident_rows: list[dict[str, Any]] = []
+    for p in obs_snaps[:300]:
+        reasons: list[str] = []
+        if _to_float(p.get("error_rate_percent"), 0.0) >= 5.0:
+            reasons.append(f"error_rate={_to_float(p.get('error_rate_percent'), 0.0):.2f}%")
+        if _to_float(p.get("latency_current"), 0.0) >= 1000.0:
+            reasons.append(f"latency={_to_float(p.get('latency_current'), 0.0):.1f}ms")
+        if _to_float(p.get("cpu_saturation"), 0.0) >= 90.0:
+            reasons.append(f"cpu={_to_float(p.get('cpu_saturation'), 0.0):.1f}%")
+        if _to_float(p.get("memory_saturation"), 0.0) >= 90.0:
+            reasons.append(f"memory={_to_float(p.get('memory_saturation'), 0.0):.1f}%")
+        if reasons:
+            incident_rows.append(
+                {
+                    "ts": str(p.get("ts") or ""),
+                    "agent_id": str(p.get("agent_id") or ""),
+                    "app_id": str(p.get("app_id") or ""),
+                    "severity": "critical" if _to_float(p.get("error_rate_percent"), 0.0) >= 10.0 else "high",
+                    "reason": ", ".join(reasons),
+                }
+            )
+    incident_rows = incident_rows[:60]
+
+    latest_age = (
+        _to_int(phase0_diagnostics.get("latest_sample_age_seconds"), 0)
+        if phase0_diagnostics.get("latest_sample_age_seconds") is not None
+        else 10**9
+    )
+    sample_count = _to_int(phase0_diagnostics.get("observability_rows"), 0)
+    synthetic_checks = [
+        {
+            "check": "event_freshness",
+            "status": "pass" if latest_age <= 30 else ("warn" if latest_age <= 120 else "fail"),
+            "value": latest_age,
+            "unit": "sec",
+            "note": "latest sample age",
+        },
+        {
+            "check": "event_volume",
+            "status": "pass" if sample_count >= 30 else ("warn" if sample_count >= 10 else "fail"),
+            "value": sample_count,
+            "unit": "rows",
+            "note": "observability rows in current view",
+        },
+        {
+            "check": "error_budget_burn",
+            "status": "pass" if _to_float(phase2_slo.get("burn_rate"), 0.0) <= 1.0 else ("warn" if _to_float(phase2_slo.get("burn_rate"), 0.0) <= 2.0 else "fail"),
+            "value": round(_to_float(phase2_slo.get("burn_rate"), 0.0), 2),
+            "unit": "x",
+            "note": "error budget burn multiplier",
+        },
+    ]
+
+    def _forecast(points: list[dict[str, Any]], future_steps: int = 6) -> list[dict[str, Any]]:
+        vals = [_to_float(p.get("value"), 0.0) for p in points[-20:]]
+        if len(vals) < 2:
+            return []
+        diffs = [vals[i] - vals[i - 1] for i in range(1, len(vals))]
+        slope = sum(diffs) / float(len(diffs))
+        base = vals[-1]
+        return [{"step": i, "value": max(0.0, base + slope * i)} for i in range(1, future_steps + 1)]
+
+    forecast_rows = {
+        "cpu_saturation": _forecast(sat_cpu_points, future_steps=6),
+        "memory_saturation": _forecast(sat_mem_points, future_steps=6),
+        "latency_ms": _forecast(latency_points, future_steps=6),
+        "error_rate_percent": _forecast(errors_points, future_steps=6),
+    }
+
+    def _corr(xs: list[float], ys: list[float]) -> float:
+        n = min(len(xs), len(ys))
+        if n < 3:
+            return 0.0
+        x = xs[:n]
+        y = ys[:n]
+        mx = sum(x) / float(n)
+        my = sum(y) / float(n)
+        num = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+        denx = sum((v - mx) ** 2 for v in x)
+        deny = sum((v - my) ** 2 for v in y)
+        den = (denx * deny) ** 0.5
+        return (num / den) if den > 0 else 0.0
+
+    corr_source = list(reversed(obs_snaps[:120]))
+    corr_latency = [_to_float(p.get("latency_current"), 0.0) for p in corr_source]
+    corr_error = [_to_float(p.get("error_rate_percent"), 0.0) for p in corr_source]
+    corr_cpu = [_to_float(p.get("cpu_saturation"), 0.0) for p in corr_source]
+    corr_mem = [_to_float(p.get("memory_saturation"), 0.0) for p in corr_source]
+    correlation_rows = [
+        {"pair": "latency vs error_rate", "value": _corr(corr_latency, corr_error)},
+        {"pair": "cpu vs latency", "value": _corr(corr_cpu, corr_latency)},
+        {"pair": "memory vs latency", "value": _corr(corr_mem, corr_latency)},
+        {"pair": "cpu vs error_rate", "value": _corr(corr_cpu, corr_error)},
+    ]
+
+    return templates.TemplateResponse(
+        "observability.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "selected_agent": selected_agent or "",
+            "selected_app": selected_app or "",
+            "selected_app_group": selected_app_group,
+            "selected_namespace": selected_namespace,
+            "agent_choices": known_agents,
+            "app_choices": app_choices,
+            "namespace_choices": namespace_choices,
+            "selected_agent_meta": selected_agent_meta,
+            "selected_agent_config": selected_agent_config,
+            "message": message,
+            "error": error,
+            "filter_message": filter_message,
+            "latest": latest,
+            "four_golden": four_golden,
+            "traces_summary": traces_summary,
+            "latency_points": latency_points,
+            "traffic_points": traffic_points,
+            "errors_points": errors_points,
+            "sat_cpu_points": sat_cpu_points,
+            "sat_mem_points": sat_mem_points,
+            "sat_disk_points": sat_disk_points,
+            "namespace_rows": namespace_rows,
+            "k8s_info": k8s_info,
+            "k8s_app_rows": k8s_app_rows,
+            "phase2_slo": phase2_slo,
+            "service_map_rows": service_map_rows,
+            "incident_rows": incident_rows,
+            "synthetic_checks": synthetic_checks,
+            "forecast_rows": forecast_rows,
+            "correlation_rows": correlation_rows,
+            "rows": obs_snaps[:80],
+            "phase0_diagnostics": phase0_diagnostics,
+            "topology_nodes": topology_nodes,
+            "topology_edges": topology_edges,
+        },
+    )
+
+
+@app.get("/observability/detail", response_class=HTMLResponse)
+async def observability_detail(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    metric: str | None = Query("latency_current"),
+    agent_id: str | None = None,
+    app_id: str | None = None,
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_agent = (agent_id or "").strip() or None
+    selected_app = (app_id or "").strip() or None
+    selected_metric = str(metric or "latency_current").strip() or "latency_current"
+
+    def _parse_ts(ts: str | None) -> datetime | None:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    rows: list[dict[str, Any]] = []
+    with get_session() as s:
+        q = s.query(TraceRun).filter(TraceRun.name == "observability.metrics")
+        if selected_agent:
+            q = q.filter(TraceRun.agent_id == selected_agent)
+        if selected_app:
+            q = q.filter(TraceRun.app_id == selected_app)
+        runs = q.order_by(TraceRun.ts.desc()).limit(OBS_UI_MAX_SNAPSHOTS).all()
+        for run in runs:
+            try:
+                out = json.loads(run.output_json or "{}")
+            except Exception:
+                out = {}
+            payload = out.get("observability_payload") if isinstance(out.get("observability_payload"), dict) else {}
+            obs = payload.get("observability") if isinstance(payload.get("observability"), dict) else {}
+            golden = obs.get("golden_signals") if isinstance(obs.get("golden_signals"), dict) else {}
+            latency = golden.get("latency_ms") if isinstance(golden.get("latency_ms"), dict) else {}
+            traffic = golden.get("traffic") if isinstance(golden.get("traffic"), dict) else {}
+            errors = golden.get("errors") if isinstance(golden.get("errors"), dict) else {}
+            saturation = golden.get("saturation") if isinstance(golden.get("saturation"), dict) else {}
+            ts = str(payload.get("timestamp") or (run.ts.isoformat() if run.ts else ""))
+            rows.append(
+                {
+                    "ts": ts,
+                    "ts_dt": _parse_ts(ts),
+                    "agent_id": str(payload.get("agent_id") or run.agent_id or "unknown"),
+                    "app_id": str(run.app_id or "unknown"),
+                    "latency_current": _to_float(latency.get("current"), 0.0),
+                    "traffic_rps": _to_float(traffic.get("requests_per_sec"), 0.0),
+                    "error_rate_percent": _to_float(errors.get("error_rate_percent"), 0.0),
+                    "cpu_saturation": _to_float(saturation.get("cpu_percent"), 0.0),
+                    "memory_saturation": _to_float(saturation.get("memory_percent"), 0.0),
+                    "disk_saturation": _to_float(saturation.get("disk_percent"), 0.0),
+                }
+            )
+
+        agent_choices = [
+            r[0]
+            for r in s.query(TraceRun.agent_id).filter(TraceRun.name == "observability.metrics").distinct().order_by(TraceRun.agent_id.asc()).all()
+            if r and r[0]
+        ]
+        app_choices = [
+            r[0]
+            for r in s.query(TraceRun.app_id).filter(TraceRun.name == "observability.metrics").distinct().order_by(TraceRun.app_id.asc()).all()
+            if r and r[0]
+        ]
+
+    metric_meta = {
+        "latency_current": {"label": "Latency", "unit": "ms", "color": "#60a5fa"},
+        "traffic_rps": {"label": "Traffic", "unit": "rps", "color": "#22c55e"},
+        "error_rate_percent": {"label": "Error Rate", "unit": "%", "color": "#ef4444"},
+        "cpu_saturation": {"label": "CPU Saturation", "unit": "%", "color": "#f59e0b"},
+        "memory_saturation": {"label": "Memory Saturation", "unit": "%", "color": "#8b5cf6"},
+        "disk_saturation": {"label": "Disk Saturation", "unit": "%", "color": "#06b6d4"},
+    }
+    if selected_metric not in metric_meta:
+        selected_metric = "latency_current"
+
+    trend_points = list(reversed(rows[:150]))
+    metric_points = [{"ts": r["ts"], "value": _to_float(r.get(selected_metric), 0.0)} for r in trend_points]
+    latest = rows[0] if rows else None
+
+    return templates.TemplateResponse(
+        "observability_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "selected_agent": selected_agent or "",
+            "selected_app": selected_app or "",
+            "selected_metric": selected_metric,
+            "metric_choices": list(metric_meta.keys()),
+            "metric_meta": metric_meta,
+            "metric_points": metric_points,
+            "agent_choices": agent_choices,
+            "app_choices": app_choices,
+            "rows": rows[:100],
+            "latest": latest,
+        },
+    )
+
+
+@app.post("/observability/toggle")
+async def observability_toggle(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    agent_name: str = Form(""),
+    enabled: str = Form("true"),
+    app_id: str = Form(""),
+    app_group: str = Form("all"),
+    namespace: str = Form(""),
+    observability_topic: str = Form("observability.metrics"),
+    observability_window: str = Form("120"),
+    k8s_auto_map_enabled: str = Form("true"),
+    k8s_auto_map_max_apps: str = Form("50"),
+    k8s_auto_map_prefix: str = Form("k8s"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    target_agent = (agent_name or "").strip()
+    if not target_agent:
+        return RedirectResponse(url="/observability?error=Select%20agent%20first", status_code=303)
+
+    enable_flag = str(enabled or "true").strip().lower() in {"1", "true", "yes", "on"}
+    topic_val = str(observability_topic or "observability.metrics").strip() or "observability.metrics"
+    try:
+        window_val = max(10, int(float(observability_window or "120")))
+    except Exception:
+        window_val = 120
+    k8s_map_flag = str(k8s_auto_map_enabled or "true").strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        k8s_max_apps_val = max(1, int(float(k8s_auto_map_max_apps or "50")))
+    except Exception:
+        k8s_max_apps_val = 50
+    k8s_prefix_val = str(k8s_auto_map_prefix or "k8s").strip() or "k8s"
+
+    cfg = {
+        "observability_enabled": bool(enable_flag),
+        "observability_topic": topic_val,
+        "observability_window": int(window_val),
+        "k8s_auto_map_enabled": bool(k8s_map_flag),
+        "k8s_auto_map_max_apps": int(k8s_max_apps_val),
+        "k8s_auto_map_prefix": k8s_prefix_val,
+    }
+    with get_session() as s:
+        row = s.query(NetraAgentConfig).filter(NetraAgentConfig.agent_name == target_agent).first()
+        if row:
+            row.updated_at = utcnow()
+            row.config_json = json.dumps(cfg, ensure_ascii=True)
+        else:
+            s.add(
+                NetraAgentConfig(
+                    agent_name=target_agent,
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                    config_json=json.dumps(cfg, ensure_ascii=True),
+                )
+            )
+        s.commit()
+    msg = f"Dashboard config updated for {target_agent} (observability {'enabled' if enable_flag else 'disabled'})"
+    return RedirectResponse(
+        url=(
+            f"/observability?agent_id={quote(target_agent)}&app_id={quote(app_id or '')}"
+            f"&app_group={quote(app_group or 'all')}&namespace={quote(namespace or '')}&message={quote(msg)}"
+        ),
+        status_code=303,
+    )
+
+
+@app.get("/api/observability/diagnostics")
+async def api_observability_diagnostics(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    agent_id: str | None = None,
+    app_id: str | None = None,
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    selected_agent = (agent_id or "").strip()
+    selected_app = (app_id or "").strip()
+    out_rows: list[dict[str, Any]] = []
+    with get_session() as s:
+        q = s.query(TraceRun).filter(TraceRun.name == "observability.metrics")
+        if selected_agent:
+            q = q.filter(TraceRun.agent_id == selected_agent)
+        if selected_app:
+            q = q.filter(TraceRun.app_id == selected_app)
+        rows = q.order_by(TraceRun.ts.desc()).limit(120).all()
+        for r in rows:
+            try:
+                body = json.loads(r.output_json or "{}")
+            except Exception:
+                body = {}
+            payload = body.get("observability_payload") if isinstance(body.get("observability_payload"), dict) else {}
+            obs = payload.get("observability") if isinstance(payload.get("observability"), dict) else {}
+            golden = obs.get("golden_signals") if isinstance(obs.get("golden_signals"), dict) else {}
+            latency = golden.get("latency_ms") if isinstance(golden.get("latency_ms"), dict) else {}
+            traffic = golden.get("traffic") if isinstance(golden.get("traffic"), dict) else {}
+            errors = golden.get("errors") if isinstance(golden.get("errors"), dict) else {}
+            saturation = golden.get("saturation") if isinstance(golden.get("saturation"), dict) else {}
+            ts = str(payload.get("timestamp") or (r.ts.isoformat() if r.ts else ""))
+            out_rows.append(
+                {
+                    "ts": ts,
+                    "agent_id": str(payload.get("agent_id") or r.agent_id or ""),
+                    "app_id": str(r.app_id or ""),
+                    "latency_ms": _to_float(latency.get("current"), 0.0),
+                    "rps": _to_float(traffic.get("requests_per_sec"), 0.0),
+                    "error_rate_percent": _to_float(errors.get("error_rate_percent"), 0.0),
+                    "cpu_percent": _to_float(saturation.get("cpu_percent"), 0.0),
+                    "memory_percent": _to_float(saturation.get("memory_percent"), 0.0),
+                    "disk_percent": _to_float(saturation.get("disk_percent"), 0.0),
+                }
+            )
+    latest = out_rows[0] if out_rows else {}
+    latest_ts_dt = None
+    try:
+        if latest and latest.get("ts"):
+            latest_ts_dt = datetime.fromisoformat(str(latest.get("ts")).replace("Z", "+00:00"))
+    except Exception:
+        latest_ts_dt = None
+    age_sec = int((datetime.now(timezone.utc) - latest_ts_dt).total_seconds()) if latest_ts_dt else None
+    missing = []
+    if not any(_to_float(r.get("latency_ms"), 0.0) >= 0.0 for r in out_rows):
+        missing.append("latency")
+    if not any(_to_float(r.get("rps"), 0.0) >= 0.0 for r in out_rows):
+        missing.append("traffic")
+    if not any(_to_float(r.get("error_rate_percent"), 0.0) >= 0.0 for r in out_rows):
+        missing.append("errors")
+    return {
+        "ok": True,
+        "filters": {"agent_id": selected_agent, "app_id": selected_app},
+        "rows": len(out_rows),
+        "latest_sample_age_seconds": age_sec,
+        "latest": latest,
+        "missing_signals": missing,
+    }
+
+
+@app.get("/api/observability/topology")
+async def api_observability_topology(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    hours: int = Query(24, ge=1, le=168),
+    agent_id: str | None = None,
+    app_id: str | None = None,
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    selected_agent = (agent_id or "").strip()
+    selected_app = (app_id or "").strip()
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    nodes: dict[str, dict[str, Any]] = {}
+    rollup: dict[tuple[str, str], dict[str, Any]] = {}
+    with get_session() as s:
+        q = s.query(TraceRun).filter(TraceRun.ts >= since, TraceRun.name != "infra.metrics", TraceRun.name != "observability.metrics")
+        if selected_agent:
+            q = q.filter(TraceRun.agent_id == selected_agent)
+        if selected_app:
+            q = q.filter(TraceRun.app_id == selected_app)
+        runs = q.order_by(TraceRun.ts.desc()).limit(TRACE_ANALYTICS_MAX_RUNS).all()
+        ids = [int(r.id) for r in runs]
+        spans = s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(ids)).all() if ids else []
+        by_run: dict[int, list[TraceSpan]] = {}
+        for sp in spans:
+            by_run.setdefault(int(sp.trace_run_id), []).append(sp)
+        for r in runs:
+            src = str(r.app_id or "unknown")
+            nodes.setdefault(src, {"id": src, "kind": "app"})
+            for sp in by_run.get(int(r.id), []):
+                tgt = _span_target_service(str(sp.name or ""), str(sp.meta_json or ""), default="")
+                if not tgt or tgt == src:
+                    continue
+                nodes.setdefault(tgt, {"id": tgt, "kind": "service"})
+                key = (src, tgt)
+                cur = rollup.get(key)
+                d = float(_to_int(sp.duration_ms, 0))
+                if not cur:
+                    rollup[key] = {"source": src, "target": tgt, "count": 1, "durations": [d]}
+                else:
+                    cur["count"] += 1
+                    cur["durations"].append(d)
+    edges = []
+    for _, v in rollup.items():
+        ds = sorted(v["durations"])
+        edges.append(
+            {
+                "source": v["source"],
+                "target": v["target"],
+                "count": int(v["count"]),
+                "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+            }
+        )
+    edges.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+    return {
+        "ok": True,
+        "filters": {"hours": hours, "agent_id": selected_agent, "app_id": selected_app},
+        "nodes": sorted(nodes.values(), key=lambda x: x["id"])[:200],
+        "edges": edges[:500],
+    }
+
+
+@app.get("/api/service-map/realtime")
+async def api_service_map_realtime(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    window_sec: int = Query(300, ge=30, le=3600),
+    environment: str | None = Query(None),
+    min_calls: int = Query(1, ge=1, le=5000),
+    max_nodes: int = Query(400, ge=20, le=2000),
+    max_edges: int = Query(1000, ge=20, le=5000),
+    demo: bool = Query(False),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    env_filter = (environment or "").strip()
+    since = datetime.now(timezone.utc) - timedelta(seconds=int(window_sec))
+    nodes: dict[str, dict[str, Any]] = {}
+    rollup: dict[tuple[str, str, str], dict[str, Any]] = {}
+    with get_session() as s:
+        runs = (
+            s.query(TraceRun)
+            .filter(TraceRun.ts >= since, TraceRun.name != "infra.metrics", TraceRun.name != "observability.metrics")
+            .order_by(TraceRun.ts.desc())
+            .limit(TRACE_ANALYTICS_MAX_RUNS)
+            .all()
+        )
+        run_ids = [int(r.id) for r in runs]
+        spans = s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(run_ids)).all() if run_ids else []
+        by_run: dict[int, list[TraceSpan]] = {}
+        for sp in spans:
+            by_run.setdefault(int(sp.trace_run_id), []).append(sp)
+        for r in runs:
+            env_name = _extract_environment_from_run(r)
+            if env_filter and env_name != env_filter:
+                continue
+            src = str(r.app_id or "unknown")
+            src_key = f"{env_name}:{src}"
+            nodes.setdefault(src_key, {"id": src_key, "service": src, "environment": env_name, "kind": "app"})
+            for sp in by_run.get(int(r.id), []):
+                tgt = _span_target_service(str(sp.name or ""), str(sp.meta_json or ""), default="")
+                if not tgt or tgt == src:
+                    continue
+                tgt_key = f"{env_name}:{tgt}"
+                nodes.setdefault(tgt_key, {"id": tgt_key, "service": tgt, "environment": env_name, "kind": "service"})
+                k = (src_key, tgt_key, env_name)
+                cur = rollup.get(k)
+                d = float(_to_int(sp.duration_ms, 0))
+                if not cur:
+                    rollup[k] = {"source": src_key, "target": tgt_key, "environment": env_name, "count": 1, "durations": [d]}
+                else:
+                    cur["count"] += 1
+                    cur["durations"].append(d)
+    edges = []
+    for _, v in rollup.items():
+        ds = sorted(v["durations"])
+        edges.append(
+            {
+                "source": v["source"],
+                "target": v["target"],
+                "environment": v["environment"],
+                "count": int(v["count"]),
+                "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+            }
+        )
+    edges = [e for e in edges if int(e.get("count", 0)) >= int(min_calls)]
+    edges.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+    edge_limited = edges[: int(max_edges)]
+    keep_ids: set[str] = set()
+    for e in edge_limited:
+        keep_ids.add(str(e.get("source") or ""))
+        keep_ids.add(str(e.get("target") or ""))
+    if keep_ids:
+        node_rows = [n for n in nodes.values() if str(n.get("id") or "") in keep_ids]
+    else:
+        node_rows = list(nodes.values())
+    node_rows = sorted(node_rows, key=lambda x: x["id"])[: int(max_nodes)]
+    allowed = {str(n.get("id") or "") for n in node_rows}
+    edge_limited = [e for e in edge_limited if str(e.get("source") or "") in allowed and str(e.get("target") or "") in allowed]
+    env_choices = sorted({n["environment"] for n in nodes.values()})
+
+    if demo and (not node_rows or not edge_limited):
+        demo_env = env_filter or "prod"
+        demo_nodes = [
+            {"id": f"{demo_env}:web-frontend", "service": "web-frontend", "environment": demo_env, "kind": "app"},
+            {"id": f"{demo_env}:api-gateway", "service": "api-gateway", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:checkout-service", "service": "checkout-service", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:payment-service", "service": "payment-service", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:inventory-service", "service": "inventory-service", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:notification-service", "service": "notification-service", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:postgres-primary", "service": "postgres-primary", "environment": demo_env, "kind": "service"},
+            {"id": f"{demo_env}:redis-cache", "service": "redis-cache", "environment": demo_env, "kind": "service"},
+        ]
+        demo_edges = [
+            {"source": f"{demo_env}:web-frontend", "target": f"{demo_env}:api-gateway", "environment": demo_env, "count": 980, "latency_avg_ms": 18.0, "latency_p95_ms": 42.0},
+            {"source": f"{demo_env}:api-gateway", "target": f"{demo_env}:checkout-service", "environment": demo_env, "count": 760, "latency_avg_ms": 64.0, "latency_p95_ms": 132.0},
+            {"source": f"{demo_env}:api-gateway", "target": f"{demo_env}:inventory-service", "environment": demo_env, "count": 620, "latency_avg_ms": 39.0, "latency_p95_ms": 88.0},
+            {"source": f"{demo_env}:checkout-service", "target": f"{demo_env}:payment-service", "environment": demo_env, "count": 410, "latency_avg_ms": 111.0, "latency_p95_ms": 240.0},
+            {"source": f"{demo_env}:checkout-service", "target": f"{demo_env}:postgres-primary", "environment": demo_env, "count": 535, "latency_avg_ms": 26.0, "latency_p95_ms": 74.0},
+            {"source": f"{demo_env}:inventory-service", "target": f"{demo_env}:redis-cache", "environment": demo_env, "count": 590, "latency_avg_ms": 7.0, "latency_p95_ms": 19.0},
+            {"source": f"{demo_env}:payment-service", "target": f"{demo_env}:notification-service", "environment": demo_env, "count": 165, "latency_avg_ms": 53.0, "latency_p95_ms": 121.0},
+        ]
+        demo_edges = [e for e in demo_edges if int(e.get("count", 0)) >= int(min_calls)][: int(max_edges)]
+        demo_keep = {str(e.get("source") or "") for e in demo_edges} | {str(e.get("target") or "") for e in demo_edges}
+        demo_nodes = [n for n in demo_nodes if str(n.get("id") or "") in demo_keep][: int(max_nodes)]
+        node_rows = demo_nodes
+        edge_limited = demo_edges
+        env_choices = sorted({str(n.get("environment") or "") for n in demo_nodes if n.get("environment")})
+
+    return {
+        "ok": True,
+        "window_sec": int(window_sec),
+        "environment": env_filter,
+        "min_calls": int(min_calls),
+        "max_nodes": int(max_nodes),
+        "max_edges": int(max_edges),
+        "demo": bool(demo),
+        "environments": env_choices,
+        "stats": {
+            "raw_nodes": int(len(nodes)),
+            "raw_edges": int(len(edges)),
+            "returned_nodes": int(len(node_rows)),
+            "returned_edges": int(len(edge_limited)),
+        },
+        "nodes": node_rows,
+        "edges": edge_limited,
+    }
+
+
+@app.get("/observability/service-map", response_class=HTMLResponse)
+async def observability_service_map_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    return templates.TemplateResponse(
+        "service_map_realtime.html",
+        {"request": request, "email": email, "role": role},
+    )
+
+
+@app.get("/apm/errors", response_class=HTMLResponse)
+async def apm_errors_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    status: str | None = Query(""),
+    environment: str | None = Query(""),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    st = (status or "").strip()
+    env = (environment or "").strip()
+    with get_session() as s:
+        q = s.query(APMErrorGroup)
+        if st:
+            q = q.filter(APMErrorGroup.workflow_status == st)
+        if env:
+            q = q.filter(APMErrorGroup.environment == env)
+        groups = q.order_by(APMErrorGroup.last_seen_ts.desc()).limit(300).all()
+        env_choices = [r[0] for r in s.query(APMErrorGroup.environment).distinct().order_by(APMErrorGroup.environment.asc()).all() if r and r[0]]
+    return templates.TemplateResponse(
+        "apm_errors.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "groups": groups,
+            "status_filter": st,
+            "environment_filter": env,
+            "env_choices": env_choices,
+            "message": str(request.query_params.get("message") or ""),
+            "error": str(request.query_params.get("error") or ""),
+        },
+    )
+
+
+@app.get("/apm/errors/{group_id}", response_class=HTMLResponse)
+async def apm_error_group_detail(
+    request: Request,
+    group_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    with get_session() as s:
+        grp = s.query(APMErrorGroup).filter(APMErrorGroup.id == int(group_id)).first()
+        if not grp:
+            return RedirectResponse(url="/apm/errors?error=Error%20group%20not%20found", status_code=303)
+        events = s.query(APMErrorEvent).filter(APMErrorEvent.error_group_id == int(group_id)).order_by(APMErrorEvent.ts.desc()).limit(500).all()
+    return templates.TemplateResponse(
+        "apm_error_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "group": grp,
+            "events": events,
+            "message": str(request.query_params.get("message") or ""),
+            "error": str(request.query_params.get("error") or ""),
+        },
+    )
+
+
+@app.post("/apm/errors/groups/{group_id}/workflow")
+async def apm_error_group_workflow_update(
+    request: Request,
+    group_id: int,
+    user: dict[str, Any] = Depends(require_login),
+    workflow_status: str = Form("open"),
+    assignee: str = Form(""),
+    workflow_notes: str = Form(""),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    allowed = {"open", "ack", "resolved", "ignored"}
+    st = (workflow_status or "open").strip().lower()
+    if st not in allowed:
+        st = "open"
+    with get_session() as s:
+        grp = s.query(APMErrorGroup).filter(APMErrorGroup.id == int(group_id)).first()
+        if not grp:
+            return RedirectResponse(url="/apm/errors?error=Error%20group%20not%20found", status_code=303)
+        grp.workflow_status = st
+        grp.assignee = (assignee or "").strip() or None
+        grp.workflow_notes = (workflow_notes or "").strip() or None
+        grp.updated_at = utcnow()
+        s.add(AuditEvent(actor_email=user.get("email"), action="apm_error_workflow_update", details=f"group_id={group_id} status={st}"))
+        s.commit()
+    return RedirectResponse(url=f"/apm/errors/{group_id}?message=Workflow%20updated", status_code=303)
+
+
+@app.get("/api/apm/errors/replay/{event_id}")
+async def api_apm_error_replay_context(
+    request: Request,
+    event_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    with get_session() as s:
+        ev = s.query(APMErrorEvent).filter(APMErrorEvent.id == int(event_id)).first()
+        if not ev:
+            return {"ok": False, "error": "event_not_found"}
+        try:
+            ctx = json.loads(ev.replay_context_json or "{}")
+        except Exception:
+            ctx = {}
+    return {"ok": True, "event_id": int(event_id), "replay_context": ctx}
+
+
+@app.get("/observability/service", response_class=HTMLResponse)
+async def observability_service_detail(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    app_id: str = Query(...),
+    agent_id: str | None = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_app = (app_id or "").strip()
+    selected_agent = (agent_id or "").strip() or None
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    run_rows: list[TraceRun] = []
+    span_rows: list[TraceSpan] = []
+    obs_rows: list[dict[str, Any]] = []
+    with get_session() as s:
+        q = s.query(TraceRun).filter(
+            TraceRun.ts >= since,
+            TraceRun.app_id == selected_app,
+            TraceRun.name != "infra.metrics",
+            TraceRun.name != "observability.metrics",
+        )
+        if selected_agent:
+            q = q.filter(TraceRun.agent_id == selected_agent)
+        run_rows = q.order_by(TraceRun.ts.desc()).limit(TRACE_ANALYTICS_MAX_RUNS).all()
+        run_ids = [int(r.id) for r in run_rows]
+        if run_ids:
+            span_rows = s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(run_ids)).all()
+        oq = s.query(TraceRun).filter(TraceRun.ts >= since, TraceRun.name == "observability.metrics", TraceRun.app_id == selected_app)
+        if selected_agent:
+            oq = oq.filter(TraceRun.agent_id == selected_agent)
+        for r in oq.order_by(TraceRun.ts.desc()).limit(OBS_UI_MAX_SNAPSHOTS).all():
+            try:
+                body = json.loads(r.output_json or "{}")
+            except Exception:
+                body = {}
+            payload = body.get("observability_payload") if isinstance(body.get("observability_payload"), dict) else {}
+            obs = payload.get("observability") if isinstance(payload.get("observability"), dict) else {}
+            golden = obs.get("golden_signals") if isinstance(obs.get("golden_signals"), dict) else {}
+            apm = obs.get("apm") if isinstance(obs.get("apm"), dict) else {}
+            latency = golden.get("latency_ms") if isinstance(golden.get("latency_ms"), dict) else {}
+            errors = golden.get("errors") if isinstance(golden.get("errors"), dict) else {}
+            traffic = golden.get("traffic") if isinstance(golden.get("traffic"), dict) else {}
+            resp = apm.get("response_time_ms") if isinstance(apm.get("response_time_ms"), dict) else {}
+            reqr = apm.get("request_rates") if isinstance(apm.get("request_rates"), dict) else {}
+            errr = apm.get("error_rates") if isinstance(apm.get("error_rates"), dict) else {}
+            obs_rows.append(
+                {
+                    "ts": (r.ts.isoformat() if r.ts else ""),
+                    "latency_current": _to_float(latency.get("current"), _to_float(resp.get("avg"), 0.0)),
+                    "latency_p95": _to_float(latency.get("p95"), _to_float(resp.get("p95"), 0.0)),
+                    "traffic_rps": _to_float(traffic.get("requests_per_sec"), _to_float(reqr.get("rps"), 0.0)),
+                    "error_rate_percent": _to_float(errors.get("error_rate_percent"), _to_float(errr.get("percent"), 0.0)),
+                }
+            )
+
+    durations = sorted([float(_to_int(r.duration_ms, 0)) for r in run_rows if _to_int(r.duration_ms, 0) > 0])
+    req_total = len(run_rows)
+    err_total = sum(1 for r in run_rows if str(r.status or "").lower() == "error" or bool(r.error))
+    if req_total <= 0 and obs_rows:
+        req_total = len(obs_rows)
+        err_total = int(round(sum(_to_float(r.get("error_rate_percent"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows))) * float(req_total) / 100.0))
+    latency_p50 = float(durations[max(0, int(len(durations) * 0.50) - 1)] if durations else 0.0)
+    latency_p95 = float(durations[max(0, int(len(durations) * 0.95) - 1)] if durations else 0.0)
+    latency_p99 = float(durations[max(0, int(len(durations) * 0.99) - 1)] if durations else 0.0)
+    if not durations and obs_rows:
+        obs_durations = sorted([_to_float(r.get("latency_current"), 0.0) for r in obs_rows if _to_float(r.get("latency_current"), 0.0) > 0])
+        latency_p50 = float(obs_durations[max(0, int(len(obs_durations) * 0.50) - 1)] if obs_durations else 0.0)
+        latency_p95 = float(obs_durations[max(0, int(len(obs_durations) * 0.95) - 1)] if obs_durations else 0.0)
+        latency_p99 = float(obs_durations[max(0, int(len(obs_durations) * 0.99) - 1)] if obs_durations else 0.0)
+
+    errored_run_ids: set[int] = {
+        int(r.id)
+        for r in run_rows
+        if str(r.status or "").lower() == "error" or bool(r.error)
+    }
+
+    dep_rollup: dict[str, dict[str, Any]] = {}
+    for sp in span_rows:
+        tgt = _span_target_service(str(sp.name or ""), str(sp.meta_json or ""), default="")
+        if not tgt or tgt == selected_app:
+            continue
+        cur = dep_rollup.get(tgt)
+        d = float(_to_int(sp.duration_ms, 0))
+        is_error_call = int(sp.trace_run_id) in errored_run_ids
+        if not cur:
+            dep_rollup[tgt] = {"service": tgt, "count": 1, "error_count": (1 if is_error_call else 0), "durations": [d]}
+        else:
+            cur["count"] += 1
+            cur["error_count"] += (1 if is_error_call else 0)
+            cur["durations"].append(d)
+    dependencies = []
+    for _, v in dep_rollup.items():
+        ds = sorted(v["durations"])
+        dependencies.append(
+            {
+                "service": v["service"],
+                "calls": int(v["count"]),
+                "error_rate_percent": (float(_to_int(v.get("error_count"), 0)) * 100.0 / float(max(1, _to_int(v.get("count"), 0)))),
+                "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+            }
+        )
+    dependencies.sort(key=lambda x: (x["calls"], x["latency_p95_ms"]), reverse=True)
+
+    resource_rollup: dict[str, dict[str, Any]] = {}
+    error_rollup: dict[str, dict[str, Any]] = {}
+    for r in run_rows:
+        resource = str(r.name or "unknown")
+        rr = resource_rollup.get(resource)
+        dur = float(_to_int(r.duration_ms, 0))
+        is_error = str(r.status or "").lower() == "error" or bool(r.error)
+        if not rr:
+            resource_rollup[resource] = {
+                "resource": resource,
+                "count": 1,
+                "error_count": (1 if is_error else 0),
+                "durations": [dur],
+            }
+        else:
+            rr["count"] += 1
+            rr["error_count"] += (1 if is_error else 0)
+            rr["durations"].append(dur)
+        if is_error:
+            sig = str(r.error or r.status or "error").strip()[:160] or "error"
+            er = error_rollup.get(sig)
+            if not er:
+                error_rollup[sig] = {"signature": sig, "count": 1, "latest_ts": (r.ts.isoformat() if r.ts else "")}
+            else:
+                er["count"] += 1
+                if str(r.ts or "") > str(er.get("latest_ts") or ""):
+                    er["latest_ts"] = (r.ts.isoformat() if r.ts else "")
+
+    resource_rows: list[dict[str, Any]] = []
+    for _, v in resource_rollup.items():
+        ds = sorted([float(x) for x in (v.get("durations") or [])])
+        count = max(1, _to_int(v.get("count"), 0))
+        resource_rows.append(
+            {
+                "resource": str(v.get("resource") or "unknown"),
+                "count": int(v.get("count") or 0),
+                "error_rate_percent": (float(_to_int(v.get("error_count"), 0)) * 100.0 / float(count)),
+                "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+                "latency_p99_ms": float(ds[max(0, int(len(ds) * 0.99) - 1)] if ds else 0.0),
+                "throughput_rpm": (float(_to_int(v.get("count"), 0)) / float(max(1, hours * 60))),
+            }
+        )
+    resource_rows.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+    error_rows = sorted(error_rollup.values(), key=lambda x: _to_int(x.get("count"), 0), reverse=True)
+
+    if not resource_rows and obs_rows:
+        avg_rps = sum(_to_float(r.get("traffic_rps"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows)))
+        avg_err = sum(_to_float(r.get("error_rate_percent"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows)))
+        resource_rows = [
+            {
+                "resource": "apm.snapshot.aggregate",
+                "count": len(obs_rows),
+                "error_rate_percent": float(avg_err),
+                "latency_avg_ms": sum(_to_float(r.get("latency_current"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows))),
+                "latency_p95_ms": float(latency_p95),
+                "latency_p99_ms": float(latency_p99),
+                "throughput_rpm": float(avg_rps * 60.0),
+            }
+        ]
+
+    trend_points = [{"ts": (r.ts.isoformat() if r.ts else ""), "value": float(_to_int(r.duration_ms, 0))} for r in reversed(run_rows[:200])]
+    if not trend_points and obs_rows:
+        trend_points = [{"ts": str(r.get("ts") or ""), "value": _to_float(r.get("latency_current"), 0.0)} for r in reversed(obs_rows[:200])]
+    percentile_heatmap = [
+        {
+            "resource": str(r.get("resource") or ""),
+            "p95": _to_float(r.get("latency_p95_ms"), 0.0),
+            "p99": _to_float(r.get("latency_p99_ms"), 0.0),
+            "error_rate_percent": _to_float(r.get("error_rate_percent"), 0.0),
+        }
+        for r in resource_rows[:20]
+    ]
+    slowest_resources = sorted(resource_rows, key=lambda x: _to_float(x.get("latency_p99_ms"), 0.0), reverse=True)[:20]
+
+    return templates.TemplateResponse(
+        "observability_service_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "selected_app": selected_app,
+            "selected_agent": selected_agent or "",
+            "hours": hours,
+            "req_total": req_total,
+            "err_total": err_total,
+            "error_rate_percent": (float(err_total) * 100.0 / float(req_total)) if req_total else 0.0,
+            "latency_p50": latency_p50,
+            "latency_p95": latency_p95,
+            "latency_p99": latency_p99,
+            "dependencies": dependencies[:100],
+            "resource_rows": resource_rows[:200],
+            "error_rows": error_rows[:100],
+            "percentile_heatmap": percentile_heatmap,
+            "slowest_resources": slowest_resources,
+            "trend_points": trend_points,
+            "recent_runs": run_rows[:80],
+        },
+    )
+
+
+@app.get("/api/apm/trace-analytics")
+async def api_apm_trace_analytics(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    app_id: str = Query(...),
+    agent_id: str | None = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    if isinstance(user, RedirectResponse):
+        # Allow automation via project API key for curl/non-browser clients.
+        auth = _require_project_api_key(request)
+        if not auth:
+            return {"ok": False, "error": "auth_required"}
+    selected_app = (app_id or "").strip()
+    if not selected_app:
+        return {"ok": False, "error": "app_id_required"}
+    selected_agent = (agent_id or "").strip() or None
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    run_rows: list[TraceRun] = []
+    span_rows: list[TraceSpan] = []
+    obs_rows: list[dict[str, Any]] = []
+    with get_session() as s:
+        q = s.query(TraceRun).filter(
+            TraceRun.ts >= since,
+            TraceRun.app_id == selected_app,
+            TraceRun.name != "infra.metrics",
+            TraceRun.name != "observability.metrics",
+        )
+        if selected_agent:
+            q = q.filter(TraceRun.agent_id == selected_agent)
+        run_rows = q.order_by(TraceRun.ts.desc()).limit(TRACE_ANALYTICS_MAX_RUNS).all()
+        ids = [int(r.id) for r in run_rows]
+        if ids:
+            span_rows = s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(ids)).all()
+        oq = s.query(TraceRun).filter(TraceRun.ts >= since, TraceRun.name == "observability.metrics", TraceRun.app_id == selected_app)
+        if selected_agent:
+            oq = oq.filter(TraceRun.agent_id == selected_agent)
+        for r in oq.order_by(TraceRun.ts.desc()).limit(OBS_UI_MAX_SNAPSHOTS).all():
+            try:
+                body = json.loads(r.output_json or "{}")
+            except Exception:
+                body = {}
+            payload = body.get("observability_payload") if isinstance(body.get("observability_payload"), dict) else {}
+            obs = payload.get("observability") if isinstance(payload.get("observability"), dict) else {}
+            golden = obs.get("golden_signals") if isinstance(obs.get("golden_signals"), dict) else {}
+            apm = obs.get("apm") if isinstance(obs.get("apm"), dict) else {}
+            latency = golden.get("latency_ms") if isinstance(golden.get("latency_ms"), dict) else {}
+            errors = golden.get("errors") if isinstance(golden.get("errors"), dict) else {}
+            traffic = golden.get("traffic") if isinstance(golden.get("traffic"), dict) else {}
+            resp = apm.get("response_time_ms") if isinstance(apm.get("response_time_ms"), dict) else {}
+            reqr = apm.get("request_rates") if isinstance(apm.get("request_rates"), dict) else {}
+            errr = apm.get("error_rates") if isinstance(apm.get("error_rates"), dict) else {}
+            obs_rows.append(
+                {
+                    "latency_current": _to_float(latency.get("current"), _to_float(resp.get("avg"), 0.0)),
+                    "latency_p95": _to_float(latency.get("p95"), _to_float(resp.get("p95"), 0.0)),
+                    "traffic_rps": _to_float(traffic.get("requests_per_sec"), _to_float(reqr.get("rps"), 0.0)),
+                    "error_rate_percent": _to_float(errors.get("error_rate_percent"), _to_float(errr.get("percent"), 0.0)),
+                }
+            )
+
+    durations = sorted([float(_to_int(r.duration_ms, 0)) for r in run_rows if _to_int(r.duration_ms, 0) > 0])
+    req_total = len(run_rows)
+    err_total = sum(1 for r in run_rows if str(r.status or "").lower() == "error" or bool(r.error))
+    if req_total <= 0 and obs_rows:
+        req_total = len(obs_rows)
+        err_total = int(round(sum(_to_float(r.get("error_rate_percent"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows))) * float(req_total) / 100.0))
+        durations = sorted([_to_float(r.get("latency_current"), 0.0) for r in obs_rows if _to_float(r.get("latency_current"), 0.0) > 0])
+    summary = {
+        "requests": int(req_total),
+        "errors": int(err_total),
+        "error_rate_percent": ((float(err_total) * 100.0 / float(req_total)) if req_total else 0.0),
+        "latency_p50_ms": float(durations[max(0, int(len(durations) * 0.50) - 1)] if durations else 0.0),
+        "latency_p95_ms": float(durations[max(0, int(len(durations) * 0.95) - 1)] if durations else 0.0),
+        "latency_p99_ms": float(durations[max(0, int(len(durations) * 0.99) - 1)] if durations else 0.0),
+        "throughput_rpm": (float(req_total) / float(max(1, hours * 60))),
+    }
+
+    error_run_ids = {
+        int(r.id)
+        for r in run_rows
+        if str(r.status or "").lower() == "error" or bool(r.error)
+    }
+    dep_rollup: dict[str, dict[str, Any]] = {}
+    for sp in span_rows:
+        tgt = _span_target_service(str(sp.name or ""), str(sp.meta_json or ""), default="")
+        if not tgt or tgt == selected_app:
+            continue
+        cur = dep_rollup.get(tgt)
+        d = float(_to_int(sp.duration_ms, 0))
+        is_err = int(sp.trace_run_id) in error_run_ids
+        if not cur:
+            dep_rollup[tgt] = {"service": tgt, "count": 1, "error_count": (1 if is_err else 0), "durations": [d]}
+        else:
+            cur["count"] += 1
+            cur["error_count"] += (1 if is_err else 0)
+            cur["durations"].append(d)
+
+    dependencies = []
+    for _, v in dep_rollup.items():
+        ds = sorted(v["durations"])
+        dependencies.append(
+            {
+                "service": v["service"],
+                "calls": int(v["count"]),
+                "error_rate_percent": (float(_to_int(v.get("error_count"), 0)) * 100.0 / float(max(1, _to_int(v.get("count"), 0)))),
+                "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+            }
+        )
+    dependencies.sort(key=lambda x: (x["calls"], x["latency_p95_ms"]), reverse=True)
+
+    resource_rollup: dict[str, dict[str, Any]] = {}
+    for r in run_rows:
+        name = str(r.name or "unknown")
+        cur = resource_rollup.get(name)
+        d = float(_to_int(r.duration_ms, 0))
+        is_err = str(r.status or "").lower() == "error" or bool(r.error)
+        if not cur:
+            resource_rollup[name] = {"resource": name, "count": 1, "error_count": (1 if is_err else 0), "durations": [d]}
+        else:
+            cur["count"] += 1
+            cur["error_count"] += (1 if is_err else 0)
+            cur["durations"].append(d)
+    resources = []
+    for _, v in resource_rollup.items():
+        ds = sorted(v["durations"])
+        resources.append(
+            {
+                "resource": str(v["resource"]),
+                "count": int(v["count"]),
+                "error_rate_percent": (float(_to_int(v.get("error_count"), 0)) * 100.0 / float(max(1, _to_int(v.get("count"), 0)))),
+                "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+                "latency_p99_ms": float(ds[max(0, int(len(ds) * 0.99) - 1)] if ds else 0.0),
+                "throughput_rpm": (float(_to_int(v.get("count"), 0)) / float(max(1, hours * 60))),
+            }
+        )
+    resources.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+    if not resources and obs_rows:
+        avg_rps = sum(_to_float(r.get("traffic_rps"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows)))
+        avg_err = sum(_to_float(r.get("error_rate_percent"), 0.0) for r in obs_rows) / max(1.0, float(len(obs_rows)))
+        resources = [
+            {
+                "resource": "apm.snapshot.aggregate",
+                "count": len(obs_rows),
+                "error_rate_percent": float(avg_err),
+                "latency_p95_ms": float(summary.get("latency_p95_ms") or 0.0),
+                "latency_p99_ms": float(summary.get("latency_p99_ms") or 0.0),
+                "throughput_rpm": float(avg_rps * 60.0),
+            }
+        ]
+    percentile_heatmap = [
+        {
+            "resource": str(r.get("resource") or ""),
+            "p95_ms": _to_float(r.get("latency_p95_ms"), 0.0),
+            "p99_ms": _to_float(r.get("latency_p99_ms"), 0.0),
+            "error_rate_percent": _to_float(r.get("error_rate_percent"), 0.0),
+        }
+        for r in resources[:20]
+    ]
+    slowest_resources = sorted(resources, key=lambda x: _to_float(x.get("latency_p99_ms"), 0.0), reverse=True)[:20]
+
+    return {
+        "ok": True,
+        "filters": {"app_id": selected_app, "agent_id": selected_agent or "", "hours": int(hours)},
+        "summary": summary,
+        "resources": resources[:300],
+        "dependencies": dependencies[:300],
+        "percentile_heatmap": percentile_heatmap,
+        "slowest_resources": slowest_resources,
+    }
+
+
+@app.get("/apm/pipeline", response_class=HTMLResponse)
+async def apm_pipeline_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    project_id: int | None = Query(None),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    message = str(request.query_params.get("message") or "")
+    error = str(request.query_params.get("error") or "")
+    selected_project_id = int(project_id) if project_id is not None else (_effective_project_id(request, user) or 0)
+
+    with get_session() as s:
+        cfg = s.query(TracePipelineConfig).order_by(TracePipelineConfig.updated_at.desc()).first()
+        if not cfg:
+            cfg = TracePipelineConfig(
+                name="default",
+                enabled=True,
+                retention_days=14,
+                default_sample_rate=100,
+                keep_error_traces=True,
+                drop_healthcheck_traces=True,
+            )
+            s.add(cfg)
+            s.commit()
+        rules = s.query(TraceSamplingRule).order_by(TraceSamplingRule.priority.desc(), TraceSamplingRule.id.asc()).all()
+        metric_cfgs = s.query(SpanMetricConfig).order_by(SpanMetricConfig.name.asc()).all()
+        metric_points = s.query(SpanMetricPoint).order_by(SpanMetricPoint.ts.desc()).limit(200).all()
+        projects = s.query(Project).order_by(Project.name.asc()).all()
+        policy_rows = s.query(ProjectRetentionPolicy).order_by(ProjectRetentionPolicy.updated_at.desc()).all()
+        policy_map = {int(p.project_id): p for p in policy_rows if _to_int(getattr(p, "project_id", 0), 0) > 0}
+        selected_policy = policy_map.get(int(selected_project_id or 0))
+
+    return templates.TemplateResponse(
+        "apm_pipeline.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "message": message,
+            "error": error,
+            "cfg": cfg,
+            "rules": rules,
+            "metric_cfgs": metric_cfgs,
+            "metric_points": metric_points,
+            "projects": projects,
+            "selected_project_id": int(selected_project_id or 0),
+            "selected_policy": selected_policy,
+            "policy_rows": policy_rows,
+            "defaults": {
+                "trace_retention_days": TRACE_RETENTION_DAYS,
+                "trace_max_rows": TRACE_MAX_ROWS,
+                "infra_retention_days": INFRA_RETENTION_DAYS,
+                "infra_max_rows": INFRA_MAX_ROWS,
+                "observability_retention_days": OBS_RETENTION_DAYS,
+                "observability_max_rows": OBS_MAX_ROWS,
+            },
+        },
+    )
+
+
+@app.post("/apm/pipeline/config")
+async def apm_pipeline_update_config(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    enabled: str = Form("true"),
+    retention_days: str = Form("14"),
+    default_sample_rate: str = Form("100"),
+    keep_error_traces: str = Form("true"),
+    drop_healthcheck_traces: str = Form("true"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        cfg = s.query(TracePipelineConfig).order_by(TracePipelineConfig.updated_at.desc()).first()
+        if not cfg:
+            cfg = TracePipelineConfig(name="default")
+            s.add(cfg)
+            s.flush()
+        cfg.updated_at = utcnow()
+        cfg.enabled = str(enabled).strip().lower() in {"1", "true", "yes", "on"}
+        cfg.retention_days = max(1, _to_int(retention_days, 14))
+        cfg.default_sample_rate = max(0, min(100, _to_int(default_sample_rate, 100)))
+        cfg.keep_error_traces = str(keep_error_traces).strip().lower() in {"1", "true", "yes", "on"}
+        cfg.drop_healthcheck_traces = str(drop_healthcheck_traces).strip().lower() in {"1", "true", "yes", "on"}
+        s.commit()
+    return RedirectResponse(url="/apm/pipeline?message=Pipeline%20config%20updated", status_code=303)
+
+
+@app.post("/apm/pipeline/project-retention/save")
+async def apm_pipeline_save_project_retention(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    project_id: str = Form(""),
+    enabled: str = Form("true"),
+    trace_retention_days: str = Form("30"),
+    trace_max_rows: str = Form("250000"),
+    infra_retention_days: str = Form("14"),
+    infra_max_rows: str = Form("120000"),
+    observability_retention_days: str = Form("14"),
+    observability_max_rows: str = Form("120000"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    pid = _to_int(project_id, 0)
+    if pid <= 0:
+        return RedirectResponse(url="/apm/pipeline?error=project_id%20required", status_code=303)
+    with get_session() as s:
+        exists = s.query(Project).filter(Project.id == pid).first()
+        if not exists:
+            return RedirectResponse(url="/apm/pipeline?error=project%20not%20found", status_code=303)
+        row = s.query(ProjectRetentionPolicy).filter(ProjectRetentionPolicy.project_id == pid).first()
+        if not row:
+            row = ProjectRetentionPolicy(project_id=pid, created_at=utcnow(), updated_at=utcnow())
+            s.add(row)
+            s.flush()
+        row.updated_at = utcnow()
+        row.enabled = str(enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+        row.trace_retention_days = max(1, _to_int(trace_retention_days, TRACE_RETENTION_DAYS))
+        row.trace_max_rows = max(1000, _to_int(trace_max_rows, TRACE_MAX_ROWS))
+        row.infra_retention_days = max(1, _to_int(infra_retention_days, INFRA_RETENTION_DAYS))
+        row.infra_max_rows = max(1000, _to_int(infra_max_rows, INFRA_MAX_ROWS))
+        row.observability_retention_days = max(1, _to_int(observability_retention_days, OBS_RETENTION_DAYS))
+        row.observability_max_rows = max(1000, _to_int(observability_max_rows, OBS_MAX_ROWS))
+        s.commit()
+    return RedirectResponse(url=f"/apm/pipeline?project_id={pid}&message=Project%20retention%20saved", status_code=303)
+
+
+@app.post("/apm/pipeline/rules/add")
+async def apm_pipeline_add_rule(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    name: str = Form("rule"),
+    enabled: str = Form("true"),
+    priority: str = Form("100"),
+    app_id_pattern: str = Form(""),
+    name_pattern: str = Form("*"),
+    min_duration_ms: str = Form(""),
+    error_only: str = Form("false"),
+    sample_rate: str = Form("100"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        s.add(
+            TraceSamplingRule(
+                name=(name or "rule").strip() or "rule",
+                enabled=str(enabled).strip().lower() in {"1", "true", "yes", "on"},
+                priority=_to_int(priority, 100),
+                app_id_pattern=(app_id_pattern or "").strip() or None,
+                name_pattern=(name_pattern or "*").strip() or "*",
+                min_duration_ms=_to_int(min_duration_ms, 0) if str(min_duration_ms or "").strip() else None,
+                error_only=str(error_only).strip().lower() in {"1", "true", "yes", "on"},
+                sample_rate=max(0, min(100, _to_int(sample_rate, 100))),
+            )
+        )
+        s.commit()
+    return RedirectResponse(url="/apm/pipeline?message=Sampling%20rule%20added", status_code=303)
+
+
+@app.post("/apm/pipeline/rules/{rule_id}/delete")
+async def apm_pipeline_delete_rule(
+    request: Request,
+    rule_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        row = s.query(TraceSamplingRule).filter(TraceSamplingRule.id == int(rule_id)).first()
+        if row:
+            s.delete(row)
+            s.commit()
+    return RedirectResponse(url="/apm/pipeline?message=Sampling%20rule%20deleted", status_code=303)
+
+
+@app.post("/apm/pipeline/span-metrics/add")
+async def apm_pipeline_add_span_metric(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    name: str = Form("span.metric"),
+    enabled: str = Form("true"),
+    span_name_pattern: str = Form("*"),
+    app_id_pattern: str = Form(""),
+    aggregation: str = Form("count"),
+    field_name: str = Form("duration_ms"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        base = (name or "span.metric").strip() or "span.metric"
+        existing = s.query(SpanMetricConfig).filter(SpanMetricConfig.name == base).first()
+        if existing:
+            base = f"{base}-{int(time.time())}"
+        s.add(
+            SpanMetricConfig(
+                name=base,
+                enabled=str(enabled).strip().lower() in {"1", "true", "yes", "on"},
+                span_name_pattern=(span_name_pattern or "*").strip() or "*",
+                app_id_pattern=(app_id_pattern or "").strip() or None,
+                aggregation=(aggregation or "count").strip().lower(),
+                field_name=(field_name or "duration_ms").strip().lower(),
+            )
+        )
+        s.commit()
+    return RedirectResponse(url="/apm/pipeline?message=Span%20metric%20config%20added", status_code=303)
+
+
+@app.post("/apm/pipeline/span-metrics/{cfg_id}/delete")
+async def apm_pipeline_delete_span_metric(
+    request: Request,
+    cfg_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        row = s.query(SpanMetricConfig).filter(SpanMetricConfig.id == int(cfg_id)).first()
+        if row:
+            s.delete(row)
+            s.commit()
+    return RedirectResponse(url="/apm/pipeline?message=Span%20metric%20config%20deleted", status_code=303)
+
+
+@app.post("/apm/pipeline/retention/run")
+async def apm_pipeline_run_retention(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    include_error_traces: str = Form("false"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        cfg = s.query(TracePipelineConfig).order_by(TracePipelineConfig.updated_at.desc()).first()
+        policy = _pipeline_cfg_dict(cfg)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, _to_int(policy.get("retention_days"), 14)))
+        include_errors = str(include_error_traces or "").strip().lower() in {"1", "true", "yes", "on"}
+        base_q = s.query(TraceRun).filter(
+            TraceRun.ts < cutoff,
+            TraceRun.name != "infra.metrics",
+            TraceRun.name != "observability.metrics",
+        )
+        base_old_count = base_q.count()
+        error_old_count = base_q.filter(TraceRun.status == "error").count()
+        q = base_q
+        if policy.get("keep_error_traces", True) and not include_errors:
+            q = q.filter((TraceRun.status != "error") | (TraceRun.status.is_(None)))
+        old_runs = q.limit(5000).all()
+        run_ids = [int(r.id) for r in old_runs]
+        deleted = 0
+        if run_ids:
+            s.query(TraceSpan).filter(TraceSpan.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(RunFeedback).filter(RunFeedback.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(ExperimentRun).filter(ExperimentRun.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(EvaluationResult).filter(EvaluationResult.trace_run_id.in_(run_ids)).delete(synchronize_session=False)
+            deleted = s.query(TraceRun).filter(TraceRun.id.in_(run_ids)).delete(synchronize_session=False)
+        s.commit()
+    msg = (
+        "Retention complete "
+        f"deleted={deleted} "
+        f"eligible_old={base_old_count} "
+        f"old_errors={error_old_count} "
+        f"include_errors={str(include_errors).lower()} "
+        f"keep_error_traces={str(bool(policy.get('keep_error_traces', True))).lower()}"
+    )
+    return RedirectResponse(url=f"/apm/pipeline?message={quote(msg)}", status_code=303)
+
+
+@app.get("/api/netra/config")
+async def api_netra_config(request: Request, agent_name: str = ""):
+    """Dashboard-controlled runtime settings for kakveda-netra.
+
+    Auth: project API key (X-API-Key/Bearer).
+    """
+    auth = _require_project_api_key(request)
+    if not auth:
+        return {"ok": False, "error": "missing or invalid api key"}
+    target_agent = (agent_name or "").strip()
+    if not target_agent:
+        return {"ok": False, "error": "agent_name is required"}
+    default_cfg = {
+        "observability_enabled": True,
+        "observability_topic": "observability.metrics",
+        "observability_window": 120,
+        "k8s_auto_map_enabled": True,
+        "k8s_auto_map_max_apps": 50,
+        "k8s_auto_map_prefix": "k8s",
+    }
+    with get_session() as s:
+        row = s.query(NetraAgentConfig).filter(NetraAgentConfig.agent_name == target_agent).first()
+        if not row:
+            cfg = dict(default_cfg)
+        else:
+            try:
+                cfg = json.loads(row.config_json or "{}")
+            except Exception:
+                cfg = {}
+    merged = dict(default_cfg)
+    if isinstance(cfg, dict):
+        merged.update(cfg)
+
+    # Dynamic instrumentation rules are pushed via agent config polling.
+    with get_session() as s:
+        rules = (
+            s.query(DynamicInstrumentationRule)
+            .filter(
+                DynamicInstrumentationRule.enabled == True,  # noqa: E712
+                (
+                    (DynamicInstrumentationRule.scope_type == "global")
+                    | ((DynamicInstrumentationRule.scope_type == "agent") & (DynamicInstrumentationRule.scope_value == target_agent))
+                ),
+            )
+            .order_by(DynamicInstrumentationRule.updated_at.desc(), DynamicInstrumentationRule.id.desc())
+            .limit(200)
+            .all()
+        )
+    merged["dynamic_instrumentation"] = [
+        {
+            "id": int(r.id),
+            "scope_type": str(r.scope_type or "agent"),
+            "scope_value": str(r.scope_value or "*"),
+            "rule_type": str(r.rule_type or "log"),
+            "target_pattern": str(r.target_pattern or "*"),
+            "condition_expr": str(r.condition_expr or ""),
+            "action": (json.loads(r.action_json or "{}") if isinstance(r.action_json, str) else {}),
+            "updated_at": (r.updated_at.isoformat() if r.updated_at else ""),
+        }
+        for r in rules
+    ]
+    return {"ok": True, "agent_name": target_agent, "config": merged}
+
+
+@app.get("/profiling", response_class=HTMLResponse)
+async def profiling_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    app_id: str | None = Query(None),
+    environment: str | None = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+    baseline_version: str | None = Query(None),
+    compare_version: str | None = Query(None),
+    trace_run_id: int | None = Query(None),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_app = (app_id or "").strip()
+    selected_env = (environment or "").strip()
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    with get_session() as s:
+        q = s.query(ProfilerSample).filter(ProfilerSample.ts >= since)
+        if selected_app:
+            q = q.filter(ProfilerSample.app_id == selected_app)
+        if selected_env:
+            q = q.filter(ProfilerSample.environment == selected_env)
+        rows = q.order_by(ProfilerSample.ts.desc()).limit(5000).all()
+
+        app_choices = [r[0] for r in s.query(ProfilerSample.app_id).distinct().order_by(ProfilerSample.app_id.asc()).all() if r and r[0]]
+        env_choices = [r[0] for r in s.query(ProfilerSample.environment).distinct().order_by(ProfilerSample.environment.asc()).all() if r and r[0]]
+        ver_choices = [r[0] for r in s.query(ProfilerSample.version).distinct().order_by(ProfilerSample.version.asc()).all() if r and r[0]]
+
+    hotspot_rollup: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        k = (str(r.service_name or "service"), str(r.method_name or "method"))
+        cur = hotspot_rollup.get(k)
+        if not cur:
+            hotspot_rollup[k] = {
+                "service_name": k[0],
+                "method_name": k[1],
+                "samples": 1,
+                "cpu_ms_total": float(_to_float(r.cpu_ms, 0.0)),
+                "memory_bytes_max": _to_int(r.memory_bytes, 0),
+                "last_ts": r.ts,
+            }
+        else:
+            cur["samples"] += 1
+            cur["cpu_ms_total"] += float(_to_float(r.cpu_ms, 0.0))
+            cur["memory_bytes_max"] = max(cur["memory_bytes_max"], _to_int(r.memory_bytes, 0))
+            cur["last_ts"] = max(cur["last_ts"], r.ts)
+    hotspots = sorted(hotspot_rollup.values(), key=lambda x: (x["cpu_ms_total"], x["samples"]), reverse=True)[:200]
+
+    def _version_hotspots(ver: str) -> dict[str, float]:
+        out: dict[str, float] = {}
+        if not ver:
+            return out
+        for r in rows:
+            if str(r.version or "") != ver:
+                continue
+            key = f"{r.service_name}:{r.method_name}"
+            out[key] = out.get(key, 0.0) + float(_to_float(r.cpu_ms, 0.0))
+        return out
+
+    base_v = (baseline_version or "").strip()
+    cmp_v = (compare_version or "").strip()
+    base_map = _version_hotspots(base_v)
+    cmp_map = _version_hotspots(cmp_v)
+    version_compare_rows: list[dict[str, Any]] = []
+    if base_v and cmp_v:
+        keys = sorted(set(base_map.keys()) | set(cmp_map.keys()))
+        for k in keys:
+            b = float(base_map.get(k, 0.0))
+            c = float(cmp_map.get(k, 0.0))
+            version_compare_rows.append(
+                {
+                    "key": k,
+                    "baseline_cpu_ms": b,
+                    "compare_cpu_ms": c,
+                    "delta_cpu_ms": c - b,
+                    "delta_percent": ((c - b) / b * 100.0) if b > 0 else (100.0 if c > 0 else 0.0),
+                }
+            )
+        version_compare_rows.sort(key=lambda x: abs(float(x["delta_cpu_ms"])), reverse=True)
+
+    correlated: list[dict[str, Any]] = []
+    if trace_run_id:
+        for r in rows:
+            if int(_to_int(r.trace_run_id, 0)) == int(trace_run_id):
+                correlated.append(
+                    {
+                        "service_name": str(r.service_name or ""),
+                        "method_name": str(r.method_name or ""),
+                        "cpu_ms": float(_to_float(r.cpu_ms, 0.0)),
+                        "memory_bytes": _to_int(r.memory_bytes, 0),
+                        "version": str(r.version or ""),
+                        "ts": r.ts,
+                    }
+                )
+        correlated.sort(key=lambda x: x["cpu_ms"], reverse=True)
+
+    return templates.TemplateResponse(
+        "profiling.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "rows": rows[:200],
+            "hotspots": hotspots,
+            "app_choices": app_choices,
+            "env_choices": env_choices,
+            "ver_choices": ver_choices,
+            "selected_app": selected_app,
+            "selected_env": selected_env,
+            "hours": hours,
+            "baseline_version": base_v,
+            "compare_version": cmp_v,
+            "version_compare_rows": version_compare_rows[:200],
+            "trace_run_id": (int(trace_run_id) if trace_run_id else None),
+            "correlated_rows": correlated[:100],
+        },
+    )
+
+
+@app.get("/api/profiling/correlation")
+async def api_profiling_correlation(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    trace_run_id: int = Query(...),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    with get_session() as s:
+        rows = (
+            s.query(ProfilerSample)
+            .filter(ProfilerSample.trace_run_id == int(trace_run_id))
+            .order_by(ProfilerSample.cpu_ms.desc(), ProfilerSample.ts.desc())
+            .limit(200)
+            .all()
+        )
+    return {
+        "ok": True,
+        "trace_run_id": int(trace_run_id),
+        "samples": [
+            {
+                "service_name": str(r.service_name or ""),
+                "method_name": str(r.method_name or ""),
+                "cpu_ms": float(_to_float(r.cpu_ms, 0.0)),
+                "memory_bytes": _to_int(r.memory_bytes, 0),
+                "version": str(r.version or ""),
+                "environment": str(r.environment or ""),
+                "ts": (r.ts.isoformat() if r.ts else ""),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/instrumentation", response_class=HTMLResponse)
+async def instrumentation_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    message = str(request.query_params.get("message") or "")
+    error = str(request.query_params.get("error") or "")
+    with get_session() as s:
+        rules = s.query(DynamicInstrumentationRule).order_by(DynamicInstrumentationRule.updated_at.desc(), DynamicInstrumentationRule.id.desc()).limit(500).all()
+        fb_rows = (
+            s.query(DynamicInstrumentationFeedback)
+            .order_by(DynamicInstrumentationFeedback.ts.desc(), DynamicInstrumentationFeedback.id.desc())
+            .limit(500)
+            .all()
+        )
+    latest_by_rule: dict[int, DynamicInstrumentationFeedback] = {}
+    for fb in fb_rows:
+        rid = _to_int(getattr(fb, "rule_id", 0), 0)
+        if rid > 0 and rid not in latest_by_rule:
+            latest_by_rule[rid] = fb
+    return templates.TemplateResponse(
+        "instrumentation.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "rules": rules,
+            "message": message,
+            "error": error,
+            "feedback_rows": fb_rows,
+            "latest_feedback_by_rule": latest_by_rule,
+        },
+    )
+
+
+@app.post("/instrumentation/rules/add")
+async def instrumentation_add_rule(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    scope_type: str = Form("agent"),
+    scope_value: str = Form("*"),
+    rule_type: str = Form("log"),
+    target_pattern: str = Form("*"),
+    condition_expr: str = Form(""),
+    action_json: str = Form("{}"),
+    enabled: str = Form("true"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    st = str(scope_type or "agent").strip().lower()
+    if st not in {"agent", "app", "global"}:
+        st = "agent"
+    rt = str(rule_type or "log").strip().lower()
+    if rt not in {"log", "metric", "span"}:
+        rt = "log"
+    try:
+        parsed_action = json.loads(action_json or "{}")
+        if not isinstance(parsed_action, dict):
+            parsed_action = {"value": parsed_action}
+    except Exception:
+        parsed_action = {"raw": str(action_json or "")}
+    with get_session() as s:
+        s.add(
+            DynamicInstrumentationRule(
+                scope_type=st,
+                scope_value=(scope_value or "*").strip() or "*",
+                rule_type=rt,
+                target_pattern=(target_pattern or "*").strip() or "*",
+                condition_expr=(condition_expr or "").strip() or None,
+                action_json=json.dumps(parsed_action, ensure_ascii=False),
+                enabled=str(enabled).strip().lower() in {"1", "true", "yes", "on"},
+                created_by=str(user.get("email") or ""),
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+        s.commit()
+    return RedirectResponse(url="/instrumentation?message=Rule%20added", status_code=303)
+
+
+@app.post("/instrumentation/rules/{rule_id}/toggle")
+async def instrumentation_toggle_rule(
+    request: Request,
+    rule_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        row = s.query(DynamicInstrumentationRule).filter(DynamicInstrumentationRule.id == int(rule_id)).first()
+        if not row:
+            return RedirectResponse(url="/instrumentation?error=Rule%20not%20found", status_code=303)
+        row.enabled = not bool(row.enabled)
+        row.updated_at = utcnow()
+        s.commit()
+    return RedirectResponse(url="/instrumentation?message=Rule%20updated", status_code=303)
+
+
+@app.post("/instrumentation/rules/{rule_id}/delete")
+async def instrumentation_delete_rule(
+    request: Request,
+    rule_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    with get_session() as s:
+        row = s.query(DynamicInstrumentationRule).filter(DynamicInstrumentationRule.id == int(rule_id)).first()
+        if row:
+            s.delete(row)
+            s.commit()
+    return RedirectResponse(url="/instrumentation?message=Rule%20deleted", status_code=303)
+
+
+@app.post("/events/instrumentation-feedback")
+async def on_instrumentation_feedback(request: Request, evt: dict[str, Any]):
+    """Ingest rule execution feedback from agents (applied/failed/skipped)."""
+    auth = _require_project_api_key(request)
+    if not auth:
+        return {"ok": False, "error": "missing or invalid api key"}
+    try:
+        agent_name = str(evt.get("agent_name") or evt.get("agent_id") or "unknown")
+        app_id = str(evt.get("app_id") or "").strip() or None
+        rule_id_raw = evt.get("rule_id")
+        rule_id = _to_int(rule_id_raw, 0)
+        status = str(evt.get("status") or "applied").strip().lower()
+        if status not in {"applied", "failed", "skipped"}:
+            status = "applied"
+        msg = str(evt.get("message") or "")[:2000] or None
+        ts = _to_dt(evt.get("ts")) or utcnow()
+        details = evt.get("details") if isinstance(evt.get("details"), dict) else {}
+
+        with get_session() as s:
+            rid = None
+            if rule_id > 0:
+                exists = s.query(DynamicInstrumentationRule.id).filter(DynamicInstrumentationRule.id == int(rule_id)).first()
+                rid = int(rule_id) if exists else None
+            s.add(
+                DynamicInstrumentationFeedback(
+                    ts=ts,
+                    agent_name=agent_name,
+                    app_id=app_id,
+                    rule_id=rid,
+                    status=status,
+                    message=msg,
+                    details_json=json.dumps(details, ensure_ascii=False),
+                )
+            )
+            s.commit()
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"instrumentation feedback persist failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/instrumentation/feedback")
+async def api_instrumentation_feedback(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    agent_name: str | None = Query(None),
+    rule_id: int | None = Query(None),
+    limit: int = Query(200, ge=1, le=2000),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    sel_agent = (agent_name or "").strip()
+    sel_rule = _to_int(rule_id, 0) if rule_id is not None else 0
+    with get_session() as s:
+        q = s.query(DynamicInstrumentationFeedback)
+        if sel_agent:
+            q = q.filter(DynamicInstrumentationFeedback.agent_name == sel_agent)
+        if sel_rule > 0:
+            q = q.filter(DynamicInstrumentationFeedback.rule_id == int(sel_rule))
+        rows = q.order_by(DynamicInstrumentationFeedback.ts.desc(), DynamicInstrumentationFeedback.id.desc()).limit(limit).all()
+    return {
+        "ok": True,
+        "rows": [
+            {
+                "id": int(r.id),
+                "ts": (r.ts.isoformat() if r.ts else ""),
+                "agent_name": str(r.agent_name or ""),
+                "app_id": str(r.app_id or ""),
+                "rule_id": (_to_int(r.rule_id, 0) if r.rule_id is not None else None),
+                "status": str(r.status or ""),
+                "message": str(r.message or ""),
+                "details_json": str(r.details_json or "{}"),
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/dbm", response_class=HTMLResponse)
+async def dbm_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    app_id: str | None = Query(None),
+    environment: str | None = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_app = (app_id or "").strip()
+    selected_env = (environment or "").strip()
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    with get_session() as s:
+        q = s.query(DBQuerySample).filter(DBQuerySample.ts >= since)
+        if selected_app:
+            q = q.filter(DBQuerySample.app_id == selected_app)
+        if selected_env:
+            q = q.filter(DBQuerySample.environment == selected_env)
+        rows = q.order_by(DBQuerySample.duration_ms.desc(), DBQuerySample.ts.desc()).limit(1000).all()
+        app_choices = [r[0] for r in s.query(DBQuerySample.app_id).distinct().order_by(DBQuerySample.app_id.asc()).all() if r and r[0]]
+        env_choices = [r[0] for r in s.query(DBQuerySample.environment).distinct().order_by(DBQuerySample.environment.asc()).all() if r and r[0]]
+
+    fp_rollup: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        fp = str(r.query_fingerprint or "")
+        cur = fp_rollup.get(fp)
+        if not cur:
+            fp_rollup[fp] = {
+                "fingerprint": fp,
+                "db_system": str(r.db_system or "unknown"),
+                "query_type": str(r.query_type or ""),
+                "sample_query": str(r.query_text or "")[:180],
+                "count": 1,
+                "duration_total_ms": float(_to_float(r.duration_ms, 0.0)),
+                "duration_max_ms": float(_to_float(r.duration_ms, 0.0)),
+                "wait_event_top": str(r.wait_event or ""),
+                "rows_examined_total": _to_int(r.rows_examined, 0),
+            }
+        else:
+            cur["count"] += 1
+            cur["duration_total_ms"] += float(_to_float(r.duration_ms, 0.0))
+            cur["duration_max_ms"] = max(cur["duration_max_ms"], float(_to_float(r.duration_ms, 0.0)))
+            cur["rows_examined_total"] += _to_int(r.rows_examined, 0)
+    hot_queries = sorted(fp_rollup.values(), key=lambda x: (x["duration_max_ms"], x["duration_total_ms"]), reverse=True)[:200]
+    for r in hot_queries:
+        r["duration_avg_ms"] = float(r["duration_total_ms"] / max(1, int(r["count"])))
+
+    wait_events: dict[str, int] = {}
+    for r in rows:
+        w = str(r.wait_event or "").strip() or "none"
+        wait_events[w] = wait_events.get(w, 0) + 1
+    wait_event_rows = sorted([{"wait_event": k, "count": v} for k, v in wait_events.items()], key=lambda x: x["count"], reverse=True)[:30]
+
+    summary = {
+        "samples": len(rows),
+        "slow_queries_over_500ms": sum(1 for r in rows if float(_to_float(r.duration_ms, 0.0)) >= 500.0),
+        "max_duration_ms": max([float(_to_float(r.duration_ms, 0.0)) for r in rows], default=0.0),
+        "avg_duration_ms": (sum(float(_to_float(r.duration_ms, 0.0)) for r in rows) / max(1, len(rows))),
+        "db_systems": sorted(list({str(r.db_system or "unknown") for r in rows})),
+    }
+
+    return templates.TemplateResponse(
+        "dbm.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "rows": rows[:300],
+            "hot_queries": hot_queries,
+            "wait_event_rows": wait_event_rows,
+            "summary": summary,
+            "selected_app": selected_app,
+            "selected_env": selected_env,
+            "hours": hours,
+            "app_choices": app_choices,
+            "env_choices": env_choices,
+        },
+    )
+
+
+@app.post("/events/db-query")
+async def on_db_query_event(evt: dict[str, Any]):
+    """Ingest DBM query event from agents/apps."""
+    try:
+        app_id = str(evt.get("app_id") or "unknown")
+        agent_id = str(evt.get("agent_id") or "unknown")
+        env = evt.get("env") if isinstance(evt.get("env"), dict) else {}
+        environment = _extract_environment_from_trace(evt, env)
+        query_text = str(evt.get("query_text") or evt.get("query") or "")[:5000]
+        qfp = str(evt.get("query_fingerprint") or _sql_fingerprint(query_text))
+        ts = _to_dt(evt.get("ts")) or utcnow()
+        qtype = str(evt.get("query_type") or (query_text.split(" ", 1)[0].upper() if query_text else ""))[:16]
+        explain_plan = evt.get("explain_plan")
+        with get_session() as s:
+            s.add(
+                DBQuerySample(
+                    ts=ts,
+                    app_id=app_id,
+                    agent_id=agent_id,
+                    environment=environment,
+                    db_system=str(evt.get("db_system") or "unknown"),
+                    db_instance=str(evt.get("db_instance") or ""),
+                    service_name=str(evt.get("service_name") or ""),
+                    query_fingerprint=qfp,
+                    query_text=query_text,
+                    query_type=qtype or None,
+                    duration_ms=float(_to_float(evt.get("duration_ms"), 0.0)),
+                    rows_examined=_to_int(evt.get("rows_examined"), 0),
+                    rows_returned=_to_int(evt.get("rows_returned"), 0),
+                    wait_event=(str(evt.get("wait_event") or "")[:128] or None),
+                    explain_plan_json=(json.dumps(explain_plan) if explain_plan is not None else None),
+                    meta_json=json.dumps({"source": "events.db-query", "event": evt}, ensure_ascii=False),
+                )
+            )
+            s.commit()
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"db-query event persist failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/events/rum")
+async def on_rum_event(evt: dict[str, Any]):
+    """Ingest RUM event (web/mobile user activity + frontend perf/errors)."""
+    _ensure_dashboard_schema()
+    try:
+        app_id = str(evt.get("app_id") or "unknown")
+        agent_id = str(evt.get("agent_id") or evt.get("sdk") or "")
+        env = evt.get("env") if isinstance(evt.get("env"), dict) else {}
+        environment = _extract_environment_from_trace(evt, env)
+        ts = _to_dt(evt.get("ts")) or utcnow()
+        user_raw = str(evt.get("user_id") or evt.get("user") or "").strip()
+        user_hash = hashlib.sha256(user_raw.encode("utf-8")).hexdigest() if user_raw else None
+        with get_session() as s:
+            s.add(
+                RUMEvent(
+                    ts=ts,
+                    app_id=app_id,
+                    agent_id=(agent_id or None),
+                    environment=environment,
+                    platform=(str(evt.get("platform") or "")[:32] or None),
+                    device_type=(str(evt.get("device_type") or evt.get("device") or "")[:32] or None),
+                    session_id=(str(evt.get("session_id") or "")[:128] or None),
+                    user_id_hash=user_hash,
+                    page=(str(evt.get("page") or evt.get("route") or "")[:256] or None),
+                    action=(str(evt.get("action") or evt.get("event_name") or "")[:128] or None),
+                    load_time_ms=float(_to_float(evt.get("load_time_ms"), 0.0)),
+                    lcp_ms=float(_to_float(evt.get("lcp_ms"), 0.0)),
+                    fid_ms=float(_to_float(evt.get("fid_ms"), 0.0)),
+                    cls=float(_to_float(evt.get("cls"), 0.0)),
+                    js_error_name=(str(evt.get("js_error_name") or evt.get("error_name") or "")[:128] or None),
+                    js_error_message=(str(evt.get("js_error_message") or evt.get("error_message") or "")[:4000] or None),
+                    release_version=(str(evt.get("release_version") or evt.get("version") or "")[:64] or None),
+                    meta_json=json.dumps({"event": evt}, ensure_ascii=False),
+                )
+            )
+            s.commit()
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"rum event persist failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/rum", response_class=HTMLResponse)
+async def rum_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    app_id: str | None = Query(None),
+    environment: str | None = Query(None),
+    hours: int = Query(24, ge=1, le=168),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    _ensure_dashboard_schema()
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    selected_app = (app_id or "").strip()
+    selected_env = (environment or "").strip()
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    with get_session() as s:
+        q = s.query(RUMEvent).filter(RUMEvent.ts >= since)
+        if selected_app:
+            q = q.filter(RUMEvent.app_id == selected_app)
+        if selected_env:
+            q = q.filter(RUMEvent.environment == selected_env)
+        rows = q.order_by(RUMEvent.ts.desc()).limit(5000).all()
+        app_choices = [r[0] for r in s.query(RUMEvent.app_id).distinct().order_by(RUMEvent.app_id.asc()).all() if r and r[0]]
+        env_choices = [r[0] for r in s.query(RUMEvent.environment).distinct().order_by(RUMEvent.environment.asc()).all() if r and r[0]]
+        monitors = s.query(RUMMonitor).order_by(RUMMonitor.updated_at.desc()).limit(200).all()
+
+        alerts_q = s.query(MonitorAlert).filter(MonitorAlert.source_type == "rum").order_by(MonitorAlert.ts.desc()).limit(200).all()
+        alerts = alerts_q
+
+        # Evaluate monitors on page load for fresh status.
+        for mon in monitors:
+            if not bool(mon.enabled):
+                _resolve_open_alert(s, source_type="rum", monitor_id=int(mon.id))
+                continue
+            m_rows = [r for r in rows if (not mon.app_id or r.app_id == mon.app_id) and (not mon.environment or r.environment == mon.environment)]
+            metric = str(mon.metric_name or "lcp_ms")
+            vals: list[float] = []
+            for r in m_rows:
+                if metric == "lcp_ms":
+                    vals.append(float(_to_float(r.lcp_ms, 0.0)))
+                elif metric == "fid_ms":
+                    vals.append(float(_to_float(r.fid_ms, 0.0)))
+                elif metric == "cls":
+                    vals.append(float(_to_float(r.cls, 0.0)))
+                elif metric == "load_time_ms":
+                    vals.append(float(_to_float(r.load_time_ms, 0.0)))
+                elif metric == "js_error_rate_percent":
+                    pass
+            if metric == "js_error_rate_percent":
+                err_cnt = sum(1 for r in m_rows if str(r.js_error_name or "").strip())
+                observed = (float(err_cnt) / max(1.0, float(len(m_rows)))) * 100.0
+            else:
+                observed = (sum(vals) / float(len(vals))) if vals else 0.0
+            breached = _compare_threshold(observed, str(mon.threshold_op or ">"), float(mon.threshold_value or 0.0))
+            if breached:
+                _upsert_open_alert(
+                    s,
+                    source_type="rum",
+                    monitor_id=int(mon.id),
+                    monitor_name=str(mon.name or f"rum-{mon.id}"),
+                    app_id=(str(mon.app_id or "") or None),
+                    environment=(str(mon.environment or "") or None),
+                    severity=("critical" if observed >= float(mon.threshold_value or 0.0) * 2 else "warning"),
+                    metric_name=metric,
+                    observed_value=float(observed),
+                    threshold_value=float(mon.threshold_value or 0.0),
+                    context={"samples": len(m_rows), "window_hours": hours},
+                )
+            else:
+                _resolve_open_alert(s, source_type="rum", monitor_id=int(mon.id))
+        s.commit()
+        alerts_raw = s.query(MonitorAlert).filter(MonitorAlert.source_type == "rum").order_by(MonitorAlert.ts.desc()).limit(200).all()
+        rows = [
+            {
+                "ts": r.ts.isoformat() if r.ts else "",
+                "app_id": str(r.app_id or ""),
+                "environment": str(r.environment or ""),
+                "platform": str(r.platform or ""),
+                "session_id": str(r.session_id or ""),
+                "user_id_hash": str(r.user_id_hash or ""),
+                "page": str(r.page or ""),
+                "action": str(r.action or ""),
+                "lcp_ms": float(_to_float(r.lcp_ms, 0.0)),
+                "fid_ms": float(_to_float(r.fid_ms, 0.0)),
+                "cls": float(_to_float(r.cls, 0.0)),
+                "js_error_name": str(r.js_error_name or ""),
+            }
+            for r in rows
+        ]
+        monitors = [
+            {
+                "name": str(m.name or ""),
+                "app_id": str(m.app_id or ""),
+                "environment": str(m.environment or ""),
+                "metric_name": str(m.metric_name or ""),
+                "threshold_op": str(m.threshold_op or ">"),
+                "threshold_value": float(m.threshold_value or 0.0),
+                "window_minutes": int(m.window_minutes or 0),
+                "enabled": bool(m.enabled),
+            }
+            for m in monitors
+        ]
+        alerts = [
+            {
+                "ts": a.ts.isoformat() if a.ts else "",
+                "monitor_name": str(a.monitor_name or ""),
+                "app_id": str(a.app_id or ""),
+                "metric_name": str(a.metric_name or ""),
+                "observed_value": float(a.observed_value or 0.0),
+                "threshold_value": float(a.threshold_value or 0.0),
+                "severity": str(a.severity or ""),
+                "status": str(a.status or ""),
+            }
+            for a in alerts_raw
+        ]
+
+    total = len(rows)
+    js_err = sum(1 for r in rows if str(r.get("js_error_name") or "").strip())
+    summary = {
+        "events": total,
+        "sessions": len({str(r.get("session_id") or "") for r in rows if str(r.get("session_id") or "").strip()}),
+        "users": len({str(r.get("user_id_hash") or "") for r in rows if str(r.get("user_id_hash") or "").strip()}),
+        "avg_lcp_ms": (sum(float(_to_float(r.get("lcp_ms"), 0.0)) for r in rows) / max(1.0, float(total))),
+        "avg_fid_ms": (sum(float(_to_float(r.get("fid_ms"), 0.0)) for r in rows) / max(1.0, float(total))),
+        "avg_cls": (sum(float(_to_float(r.get("cls"), 0.0)) for r in rows) / max(1.0, float(total))),
+        "js_error_rate_percent": (float(js_err) / max(1.0, float(total))) * 100.0,
+    }
+    return templates.TemplateResponse(
+        "rum.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "rows": rows[:300],
+            "summary": summary,
+            "monitors": monitors,
+            "alerts": alerts,
+            "app_choices": app_choices,
+            "env_choices": env_choices,
+            "selected_app": selected_app,
+            "selected_env": selected_env,
+            "hours": hours,
+        },
+    )
+
+
+@app.post("/rum/monitors/add")
+async def rum_monitor_add(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    name: str = Form("rum-monitor"),
+    app_id: str = Form(""),
+    environment: str = Form(""),
+    metric_name: str = Form("lcp_ms"),
+    threshold_value: str = Form("2500"),
+    threshold_op: str = Form(">"),
+    window_minutes: str = Form("15"),
+    enabled: str = Form("true"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    _ensure_dashboard_schema()
+    with get_session() as s:
+        nm = (name or "rum-monitor").strip() or "rum-monitor"
+        if s.query(RUMMonitor).filter(RUMMonitor.name == nm).first():
+            nm = f"{nm}-{int(time.time())}"
+        s.add(
+            RUMMonitor(
+                name=nm,
+                app_id=((app_id or "").strip() or None),
+                environment=((environment or "").strip() or None),
+                metric_name=(metric_name or "lcp_ms").strip() or "lcp_ms",
+                threshold_value=float(_to_float(threshold_value, 2500.0)),
+                threshold_op=(threshold_op or ">").strip() or ">",
+                window_minutes=max(1, _to_int(window_minutes, 15)),
+                enabled=str(enabled).strip().lower() in {"1", "true", "yes", "on"},
+                created_by=str(user.get("email") or ""),
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+        s.commit()
+    return RedirectResponse(url="/rum?message=RUM%20monitor%20added", status_code=303)
+
+
+@app.get("/apm/monitors", response_class=HTMLResponse)
+async def apm_monitors_page(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    _ensure_dashboard_schema()
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    message = str(request.query_params.get("message") or "")
+    error = str(request.query_params.get("error") or "")
+    with get_session() as s:
+        _ensure_default_apm_monitors(s)
+        s.commit()
+        mons = s.query(APMMonitor).order_by(APMMonitor.updated_at.desc()).limit(300).all()
+        eval_rows: list[dict[str, Any]] = []
+        for mon in mons:
+            mon_view = {
+                "id": int(mon.id or 0),
+                "name": str(mon.name or ""),
+                "app_id": str(mon.app_id or ""),
+                "environment": str(mon.environment or ""),
+                "monitor_type": str(mon.monitor_type or ""),
+                "metric_name": str(mon.metric_name or ""),
+                "threshold_op": str(mon.threshold_op or ">"),
+                "threshold_value": float(mon.threshold_value or 0.0),
+                "enabled": bool(mon.enabled),
+            }
+            if not bool(mon.enabled):
+                _resolve_open_alert(s, source_type="apm", monitor_id=int(mon.id))
+                eval_rows.append({"monitor": mon_view, "breached": False, "observed": 0.0, "samples": 0, "severity": "info"})
+                continue
+            ev = _evaluate_apm_monitor(s, mon)
+            eval_rows.append({"monitor": mon_view, **ev})
+            if bool(ev.get("breached")):
+                _upsert_open_alert(
+                    s,
+                    source_type="apm",
+                    monitor_id=int(mon.id),
+                    monitor_name=str(mon.name or f"apm-{mon.id}"),
+                    app_id=(str(mon.app_id or "") or None),
+                    environment=(str(mon.environment or "") or None),
+                    severity=str(ev.get("severity") or "warning"),
+                    metric_name=str(mon.metric_name or ""),
+                    observed_value=float(ev.get("observed") or 0.0),
+                    threshold_value=float(mon.threshold_value or 0.0),
+                    context={"samples": int(ev.get("samples") or 0), "monitor_type": str(mon.monitor_type or "")},
+                )
+            else:
+                _resolve_open_alert(s, source_type="apm", monitor_id=int(mon.id))
+        s.commit()
+        alerts_raw = s.query(MonitorAlert).filter(MonitorAlert.source_type == "apm").order_by(MonitorAlert.ts.desc()).limit(300).all()
+        alerts = [
+            {
+                "ts": a.ts.isoformat() if a.ts else "",
+                "monitor_name": str(a.monitor_name or ""),
+                "app_id": str(a.app_id or ""),
+                "metric_name": str(a.metric_name or ""),
+                "observed_value": float(a.observed_value or 0.0),
+                "threshold_value": float(a.threshold_value or 0.0),
+                "severity": str(a.severity or ""),
+                "status": str(a.status or ""),
+            }
+            for a in alerts_raw
+        ]
+    return templates.TemplateResponse(
+        "apm_monitors.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "message": message,
+            "error": error,
+            "eval_rows": eval_rows,
+            "alerts": alerts,
+        },
+    )
+
+
+@app.post("/apm/monitors/add")
+async def apm_monitor_add(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    name: str = Form("apm-monitor"),
+    app_id: str = Form(""),
+    environment: str = Form(""),
+    monitor_type: str = Form("metric"),
+    metric_name: str = Form("error_rate_percent"),
+    threshold_value: str = Form("5"),
+    threshold_op: str = Form(">"),
+    window_minutes: str = Form("15"),
+    enabled: str = Form("true"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    _ensure_dashboard_schema()
+    with get_session() as s:
+        nm = (name or "apm-monitor").strip() or "apm-monitor"
+        if s.query(APMMonitor).filter(APMMonitor.name == nm).first():
+            nm = f"{nm}-{int(time.time())}"
+        s.add(
+            APMMonitor(
+                name=nm,
+                app_id=((app_id or "").strip() or None),
+                environment=((environment or "").strip() or None),
+                monitor_type=(monitor_type or "metric").strip() or "metric",
+                metric_name=(metric_name or "error_rate_percent").strip() or "error_rate_percent",
+                threshold_value=float(_to_float(threshold_value, 5.0)),
+                threshold_op=(threshold_op or ">").strip() or ">",
+                window_minutes=max(1, _to_int(window_minutes, 15)),
+                enabled=str(enabled).strip().lower() in {"1", "true", "yes", "on"},
+                auto_generated=False,
+                created_by=str(user.get("email") or ""),
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+        )
+        s.commit()
+    return RedirectResponse(url="/apm/monitors?message=APM%20monitor%20added", status_code=303)
+
+
+@app.get("/correlation/trace/{run_id}", response_class=HTMLResponse)
+async def cross_telemetry_correlation_page(
+    request: Request,
+    run_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    _ensure_dashboard_schema()
+    email = user["email"]
+    roles = user.get("roles", [])
+    role = roles[0] if roles else "unknown"
+    with get_session() as s:
+        run = s.query(TraceRun).filter(TraceRun.id == int(run_id)).first()
+        if not run:
+            return RedirectResponse(url="/runs?error=Run%20not%20found", status_code=303)
+        ts = run.ts or utcnow()
+        t0 = ts - timedelta(minutes=15)
+        t1 = ts + timedelta(minutes=15)
+        rum_rows = (
+            s.query(RUMEvent)
+            .filter(RUMEvent.app_id == str(run.app_id or ""), RUMEvent.ts >= t0, RUMEvent.ts <= t1)
+            .order_by(RUMEvent.ts.desc())
+            .limit(120)
+            .all()
+        )
+        infra_rows = (
+            s.query(TraceRun)
+            .filter(TraceRun.name == "infra.metrics", TraceRun.ts >= t0, TraceRun.ts <= t1)
+            .order_by(TraceRun.ts.desc())
+            .limit(30)
+            .all()
+        )
+        obs_rows = (
+            s.query(TraceRun)
+            .filter(TraceRun.name == "observability.metrics", TraceRun.ts >= t0, TraceRun.ts <= t1, TraceRun.app_id == str(run.app_id or ""))
+            .order_by(TraceRun.ts.desc())
+            .limit(30)
+            .all()
+        )
+        sec_rows = (
+            s.query(WarningEvent)
+            .filter(WarningEvent.app_id == str(run.app_id or ""), WarningEvent.ts >= t0, WarningEvent.ts <= t1)
+            .order_by(WarningEvent.ts.desc())
+            .limit(120)
+            .all()
+        )
+        db_rows = (
+            s.query(DBQuerySample)
+            .filter(DBQuerySample.app_id == str(run.app_id or ""), DBQuerySample.ts >= t0, DBQuerySample.ts <= t1)
+            .order_by(DBQuerySample.duration_ms.desc(), DBQuerySample.ts.desc())
+            .limit(120)
+            .all()
+        )
+        err_rows = (
+            s.query(APMErrorEvent)
+            .filter(
+                (APMErrorEvent.trace_run_id == int(run_id))
+                | ((APMErrorEvent.app_id == str(run.app_id or "")) & (APMErrorEvent.ts >= t0) & (APMErrorEvent.ts <= t1))
+            )
+            .order_by(APMErrorEvent.ts.desc())
+            .limit(120)
+            .all()
+        )
+        joined_counts = {
+            "rum_events": len(rum_rows),
+            "security_signals": len(sec_rows),
+            "db_query_samples": len(db_rows),
+            "apm_error_events": len(err_rows),
+            "infra_snapshots": len(infra_rows),
+            "observability_snapshots": len(obs_rows),
+        }
+
+    score_weights = {
+        "rum_events": 12.0,
+        "security_signals": 10.0,
+        "db_query_samples": 20.0,
+        "apm_error_events": 18.0,
+        "infra_snapshots": 20.0,
+        "observability_snapshots": 20.0,
+    }
+    score = 0.0
+    for k, w in score_weights.items():
+        if _to_int(joined_counts.get(k), 0) > 0:
+            score += w
+    correlation_score = min(100.0, score)
+    insights: list[str] = []
+    if _to_int(joined_counts.get("apm_error_events"), 0) > 0 and _to_int(joined_counts.get("db_query_samples"), 0) > 0:
+        insights.append("APM errors correlate with DB load/query activity in the same time window.")
+    if _to_int(joined_counts.get("infra_snapshots"), 0) > 0 and _to_int(joined_counts.get("observability_snapshots"), 0) > 0:
+        insights.append("Infra saturation context is available alongside app golden signals.")
+    if _to_int(joined_counts.get("rum_events"), 0) > 0 and _to_int(joined_counts.get("apm_error_events"), 0) > 0:
+        insights.append("User-facing RUM signals align with backend error events.")
+    if not insights:
+        insights.append("Low cross-signal overlap in the selected window; increase signal volume or widen window.")
+
+    return templates.TemplateResponse(
+        "cross_correlation.html",
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "run": run,
+            "rum_rows": rum_rows,
+            "infra_rows": infra_rows,
+            "obs_rows": obs_rows,
+            "sec_rows": sec_rows,
+            "db_rows": db_rows,
+            "err_rows": err_rows,
+            "joined_counts": joined_counts,
+            "correlation_score": correlation_score,
+            "insights": insights,
+        },
+    )
+
+
+@app.get("/correlation/oneclick/{run_id}", response_class=HTMLResponse)
+async def correlation_oneclick_page(
+    request: Request,
+    run_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    # Alias route for clearer "one-click deep correlation" UX.
+    return await cross_telemetry_correlation_page(request=request, run_id=run_id, user=user)
+
+
+@app.get("/api/correlation/trace/{run_id}")
+async def api_cross_telemetry_correlation(
+    request: Request,
+    run_id: int,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    _ensure_dashboard_schema()
+    with get_session() as s:
+        run = s.query(TraceRun).filter(TraceRun.id == int(run_id)).first()
+        if not run:
+            return {"ok": False, "error": "run_not_found"}
+        ts = run.ts or utcnow()
+        t0 = ts - timedelta(minutes=15)
+        t1 = ts + timedelta(minutes=15)
+        rum_count = s.query(RUMEvent).filter(RUMEvent.app_id == str(run.app_id or ""), RUMEvent.ts >= t0, RUMEvent.ts <= t1).count()
+        security_count = s.query(WarningEvent).filter(WarningEvent.app_id == str(run.app_id or ""), WarningEvent.ts >= t0, WarningEvent.ts <= t1).count()
+        db_count = s.query(DBQuerySample).filter(DBQuerySample.app_id == str(run.app_id or ""), DBQuerySample.ts >= t0, DBQuerySample.ts <= t1).count()
+        apm_err_count = s.query(APMErrorEvent).filter((APMErrorEvent.trace_run_id == int(run_id)) | ((APMErrorEvent.app_id == str(run.app_id or "")) & (APMErrorEvent.ts >= t0) & (APMErrorEvent.ts <= t1))).count()
+        infra_count = s.query(TraceRun).filter(TraceRun.name == "infra.metrics", TraceRun.ts >= t0, TraceRun.ts <= t1).count()
+        obs_count = s.query(TraceRun).filter(TraceRun.name == "observability.metrics", TraceRun.ts >= t0, TraceRun.ts <= t1, TraceRun.app_id == str(run.app_id or "")).count()
+    score_weights = {
+        "rum_events": 12.0,
+        "security_signals": 10.0,
+        "db_query_samples": 20.0,
+        "apm_error_events": 18.0,
+        "infra_snapshots": 20.0,
+        "observability_snapshots": 20.0,
+    }
+    joined = {
+        "rum_events": rum_count,
+        "security_signals": security_count,
+        "db_query_samples": db_count,
+        "apm_error_events": apm_err_count,
+        "infra_snapshots": infra_count,
+        "observability_snapshots": obs_count,
+    }
+    score = 0.0
+    for k, w in score_weights.items():
+        if _to_int(joined.get(k), 0) > 0:
+            score += w
+    return {
+        "ok": True,
+        "run_id": int(run_id),
+        "app_id": str(run.app_id or ""),
+        "window_minutes": 15,
+        "joined_counts": joined,
+        "correlation_score": min(100.0, score),
+    }
+
+
+@app.get("/api/platform/readiness")
+async def api_platform_readiness(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return {"ok": False, "error": "auth_required"}
+    queue_depth = int(_metrics_queue.qsize()) if _metrics_queue is not None else 0
+    worker_running = bool(_metrics_worker_task is not None and not _metrics_worker_task.done())
+    with get_session() as s:
+        latest_run = s.query(TraceRun).order_by(TraceRun.ts.desc()).first()
+        latest_ts = latest_run.ts.isoformat() if latest_run and latest_run.ts else ""
+        now = datetime.now(timezone.utc)
+        latest_age_sec = int((now - latest_run.ts).total_seconds()) if latest_run and latest_run.ts else None
+        total_runs = int(s.query(TraceRun.id).count() or 0)
+        total_spans = int(s.query(TraceSpan.id).count() or 0)
+    return {
+        "ok": True,
+        "readiness": {
+            "metrics_queue_enabled": bool(METRICS_QUEUE_ENABLED),
+            "metrics_queue_depth": queue_depth,
+            "metrics_worker_running": worker_running,
+            "retention_interval_sec": int(INGEST_RETENTION_INTERVAL_SEC),
+            "ui_caps": {
+                "infra_snapshots": int(INFRA_UI_MAX_SNAPSHOTS),
+                "obs_snapshots": int(OBS_UI_MAX_SNAPSHOTS),
+                "trace_analytics_runs": int(TRACE_ANALYTICS_MAX_RUNS),
+            },
+            "data_state": {
+                "latest_run_ts": latest_ts,
+                "latest_run_age_sec": latest_age_sec,
+                "total_runs": total_runs,
+                "total_spans": total_spans,
+            },
+        },
+    }
+
+
+@app.post("/infra/layouts/save")
+async def infra_layout_save(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    layout_name: str = Form(...),
+    set_default: str | None = Form(None),
+    agent_id: str = Form(""),
+    q: str = Form(""),
+    custom_metric: str = Form("cpu_percent_total"),
+    custom_metric_2: str = Form("memory_percent"),
+    cpu_threshold: str = Form("85"),
+    memory_threshold: str = Form("85"),
+    disk_threshold: str = Form("90"),
+    load_threshold: str = Form("1.2"),
+    temp_threshold: str = Form("85"),
+    collection_ms_threshold: str = Form("500"),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    name = (layout_name or "").strip()
+    if not name:
+        return RedirectResponse(url="/infra?error=Layout%20name%20required", status_code=303)
+    email = str(user.get("email") or "")
+    project_id = _effective_project_id(request, user)
+    config = {
+        "agent_id": agent_id,
+        "q": q,
+        "custom_metric": custom_metric,
+        "custom_metric_2": custom_metric_2,
+        "cpu_threshold": cpu_threshold,
+        "memory_threshold": memory_threshold,
+        "disk_threshold": disk_threshold,
+        "load_threshold": load_threshold,
+        "temp_threshold": temp_threshold,
+        "collection_ms_threshold": collection_ms_threshold,
+    }
+    set_def = str(set_default or "").lower() in {"1", "true", "yes", "on"}
+
+    with get_session() as s:
+        ql = s.query(InfraDashboardLayout).filter(
+            InfraDashboardLayout.user_email == email,
+            InfraDashboardLayout.name == name,
+        )
+        if project_id is None:
+            ql = ql.filter(InfraDashboardLayout.project_id.is_(None))
+        else:
+            ql = ql.filter(InfraDashboardLayout.project_id == project_id)
+        row = ql.first()
+
+        if set_def:
+            q2 = s.query(InfraDashboardLayout).filter(InfraDashboardLayout.user_email == email)
+            if project_id is None:
+                q2 = q2.filter(InfraDashboardLayout.project_id.is_(None))
+            else:
+                q2 = q2.filter(InfraDashboardLayout.project_id == project_id)
+            for r in q2.all():
+                r.is_default = False
+                r.updated_at = utcnow()
+
+        if row:
+            row.config_json = json.dumps(config)
+            row.updated_at = utcnow()
+            if not str(getattr(row, "layout_uid", "") or "").strip():
+                row.layout_uid = f"infra-layout-{uuid.uuid4().hex[:12]}"
+            if set_def:
+                row.is_default = True
+        else:
+            row = InfraDashboardLayout(
+                user_email=email,
+                project_id=project_id,
+                layout_uid=f"infra-layout-{uuid.uuid4().hex[:12]}",
+                name=name,
+                config_json=json.dumps(config),
+                is_default=set_def,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+            )
+            s.add(row)
+        s.commit()
+    return RedirectResponse(url="/infra?message=layout%20saved", status_code=303)
+
+
+@app.post("/infra/layouts/delete")
+async def infra_layout_delete(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    layout_id: int = Form(...),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = str(user.get("email") or "")
+    with get_session() as s:
+        row = s.query(InfraDashboardLayout).filter(InfraDashboardLayout.id == layout_id).first()
+        if row and str(row.user_email or "") == email:
+            s.delete(row)
+            s.commit()
+    return RedirectResponse(url="/infra?message=layout%20deleted", status_code=303)
+
+
+@app.get("/infra/layouts/export/{layout_id}")
+async def infra_layout_export(
+    layout_id: int,
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = str(user.get("email") or "")
+    with get_session() as s:
+        row = s.query(InfraDashboardLayout).filter(InfraDashboardLayout.id == layout_id).first()
+        if not row or str(row.user_email or "") != email:
+            return RedirectResponse(url="/infra?error=layout%20not%20found", status_code=303)
+        try:
+            cfg = json.loads(row.config_json or "{}")
+        except Exception:
+            cfg = {}
+        payload = {
+            "api_version": "kakveda.infra.layout.v1",
+            "layout_uid": str(getattr(row, "layout_uid", "") or f"infra-layout-{uuid.uuid4().hex[:12]}"),
+            "layout_name": str(row.name or "layout"),
+            "user_email": email,
+            "project_id": row.project_id,
+            "is_default": bool(row.is_default),
+            "config": cfg,
+            "exported_at": utcnow().isoformat(),
+        }
+        body = yaml.safe_dump(payload, sort_keys=False)
+        safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(row.name or "layout")).strip("-") or "layout"
+        filename = f"{safe_name}-{payload['layout_uid']}.yaml"
+    return Response(
+        content=body,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/infra/layouts/import")
+async def infra_layout_import(
+    request: Request,
+    user: dict[str, Any] = Depends(require_login),
+    layout_file: UploadFile = File(...),
+):
+    if isinstance(user, RedirectResponse):
+        return user
+    email = str(user.get("email") or "")
+    project_id = _effective_project_id(request, user)
+    try:
+        raw = await layout_file.read()
+        parsed = yaml.safe_load(raw.decode("utf-8", errors="ignore"))
+        if not isinstance(parsed, dict):
+            return RedirectResponse(url="/infra?error=invalid%20yaml%20format", status_code=303)
+        name = str(parsed.get("layout_name") or parsed.get("name") or "").strip()
+        layout_uid = str(parsed.get("layout_uid") or "").strip()
+        config = parsed.get("config")
+        if not name:
+            return RedirectResponse(url="/infra?error=layout_name%20missing", status_code=303)
+        if not isinstance(config, dict):
+            return RedirectResponse(url="/infra?error=config%20missing", status_code=303)
+        if not layout_uid:
+            layout_uid = f"infra-layout-{uuid.uuid4().hex[:12]}"
+    except Exception:
+        return RedirectResponse(url="/infra?error=failed%20to%20parse%20yaml", status_code=303)
+
+    with get_session() as s:
+        # Ensure uid uniqueness in scope by suffixing if needed.
+        test_uid = layout_uid
+        i = 1
+        while True:
+            q = s.query(InfraDashboardLayout).filter(InfraDashboardLayout.layout_uid == test_uid)
+            q = q.filter(InfraDashboardLayout.user_email == email)
+            if project_id is None:
+                q = q.filter(InfraDashboardLayout.project_id.is_(None))
+            else:
+                q = q.filter(InfraDashboardLayout.project_id == project_id)
+            if not q.first():
+                break
+            i += 1
+            test_uid = f"{layout_uid}-{i}"
+        layout_uid = test_uid
+
+        row = InfraDashboardLayout(
+            user_email=email,
+            project_id=project_id,
+            layout_uid=layout_uid,
+            name=name,
+            config_json=json.dumps(config),
+            is_default=False,
+            created_at=utcnow(),
+            updated_at=utcnow(),
+        )
+        s.add(row)
+        s.commit()
+    return RedirectResponse(url="/infra?message=layout%20imported", status_code=303)
+
+
 @app.get("/failure/{failure_id}", response_class=HTMLResponse)
 async def failure_detail(request: Request, failure_id: str, user: dict[str, Any] = Depends(require_login)):
     """Show detailed information about a specific failure."""
@@ -2121,7 +7209,6 @@ async def get_scenarios_data(user: dict[str, Any] = Depends(require_login)):
 
 
 @app.get("/scenarios", response_class=HTMLResponse)
-
 async def scenarios_page(request: Request, user: dict[str, Any] = Depends(require_login)):
     if isinstance(user, RedirectResponse):
         return user
@@ -2168,7 +7255,15 @@ async def scenarios_page(request: Request, user: dict[str, Any] = Depends(requir
 
     return templates.TemplateResponse(
         "scenarios.html",
-        {"request": request, "email": email, "role": role, "runs": runs, "app_choices": app_choices},
+        {
+            "request": request,
+            "email": email,
+            "role": role,
+            "runs": runs,
+            "app_choices": app_choices,
+            "error": str(request.query_params.get("error") or ""),
+            "message": str(request.query_params.get("message") or ""),
+        },
     )
 
 
@@ -2183,146 +7278,162 @@ async def run_scenario(
     if isinstance(user, RedirectResponse):
         return user
     agent_id = "dashboard-ui"
-
-    started = datetime.now(timezone.utc)
-    async with httpx.AsyncClient(timeout=8.0) as client:
-        span_total_start = datetime.now(timezone.utc)
-        span_warn_start = datetime.now(timezone.utc)
-        # 1) call warning-policy
-        wresp = await client.post(
-            f"{WARN_URL}/warn",
-            json={"app_id": app_id, "agent_id": agent_id, "prompt": prompt, "tools": [], "env": {"os": "linux"}},
-        )
-        warn = wresp.json()
-        span_warn_end = datetime.now(timezone.utc)
-
-        # 2) produce model response (ollama or stub)
-        span_gen_start = datetime.now(timezone.utc)
-        response_text, gen_meta = await ollama_generate_with_meta(prompt)
-        span_gen_end = datetime.now(timezone.utc)
-
-        # 3) ingest trace
-        span_ing_start = datetime.now(timezone.utc)
-        trace = {
-            "trace_id": str(uuid.uuid4()),
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "app_id": app_id,
-            "agent_id": agent_id,
-            "prompt": prompt,
-            "response": response_text,
-            "model": OLLAMA_MODEL,
-            "temperature": 0.2,
-            "tools": [],
-            "env": {"os": "linux"},
-        }
-        await client.post(f"{INGEST_URL}/ingest", json={"trace": trace})
-        span_ing_end = datetime.now(timezone.utc)
-    span_total_end = datetime.now(timezone.utc)
-    duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
-
-    # store locally for dashboard history views
-    with get_session() as s:
-        # Load scenario data if scenario_id provided
-        scenario_code = None
-        expected_behavior = None
-        if scenario_id:
-            scenario = s.query(Scenario).filter(Scenario.id == scenario_id).first()
-            if scenario:
-                scenario_code = scenario.code
-                expected_behavior = scenario.expected_behavior
-        
-        sr = ScenarioRun(
-            app_id=app_id, 
-            agent_id=agent_id, 
-            prompt=prompt, 
-            scenario_id=scenario_id,
-            scenario_code=scenario_code,
-            expected_behavior=expected_behavior,
-            note="ran from dashboard"
-        )
-        s.add(sr)
-        s.flush()
-
-        tr = TraceRun(
-            scenario_run_id=sr.id,
-            app_id=app_id,
-            agent_id=agent_id,
-            name="scenario.run",
-            status="completed",
-            input_json=json.dumps({"prompt": prompt}),
-            output_json=json.dumps({"response": response_text, "warn": warn, "trace": {"trace_id": trace["trace_id"]}, "gen": gen_meta}),
-            duration_ms=duration_ms,
-        )
-        s.add(tr)
-        s.flush()
-
-        def _dur(a: datetime, b: datetime) -> int:
-            return int((b - a).total_seconds() * 1000)
-
-        # Parent span for the whole scenario run + child spans for steps.
-        parent_span = TraceSpan(
-            trace_run_id=tr.id,
-            parent_id=None,
-            name="scenario.run",
-            start_ts=span_total_start,
-            end_ts=span_total_end,
-            duration_ms=_dur(span_total_start, span_total_end),
-            meta_json=json.dumps({"app_id": app_id, "agent_id": agent_id}),
-        )
-        s.add(parent_span)
-        s.flush()
-
-        s.add(
-            TraceSpan(
-                trace_run_id=tr.id,
-                parent_id=parent_span.id,
-                name="warn_policy.call",
-                start_ts=span_warn_start,
-                end_ts=span_warn_end,
-                duration_ms=_dur(span_warn_start, span_warn_end),
-                meta_json=json.dumps({"status": wresp.status_code, "pattern_id": warn.get("pattern_id"), "confidence": warn.get("confidence")}),
+    try:
+        started = datetime.now(timezone.utc)
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            span_total_start = datetime.now(timezone.utc)
+            span_warn_start = datetime.now(timezone.utc)
+            # 1) call warning-policy
+            wresp = await client.post(
+                f"{WARN_URL}/warn",
+                json={"app_id": app_id, "agent_id": agent_id, "prompt": prompt, "tools": [], "env": {"os": "linux"}},
             )
-        )
-        s.add(
-            TraceSpan(
-                trace_run_id=tr.id,
-                parent_id=parent_span.id,
-                name="model.generate",
-                start_ts=span_gen_start,
-                end_ts=span_gen_end,
-                duration_ms=_dur(span_gen_start, span_gen_end),
-                meta_json=json.dumps({"model": OLLAMA_MODEL, "source": "ollama_or_stub", "provider": gen_meta.get("provider"), "latency_ms": gen_meta.get("latency_ms")}),
-            )
-        )
-        s.add(
-            TraceSpan(
-                trace_run_id=tr.id,
-                parent_id=parent_span.id,
-                name="ingestion.ingest",
-                start_ts=span_ing_start,
-                end_ts=span_ing_end,
-                duration_ms=_dur(span_ing_start, span_ing_end),
-                meta_json=json.dumps({"trace_id": trace["trace_id"]}),
-            )
-        )
-        we = WarningEvent(
-            app_id=app_id,
-            agent_id=agent_id,
-            action=str(warn.get("action")),
-            confidence=str(warn.get("confidence")),
-            pattern_id=warn.get("pattern_id"),
-            prompt=prompt,
-            message=str(warn.get("message")),
-            references_json=json.dumps(warn.get("references") or []),
-        )
-        s.add(we)
-        s.add(AuditEvent(actor_email=user.get("email"), action="scenario_run", details=f"app_id={app_id}"))
-        s.commit()
+            warn = wresp.json()
+            span_warn_end = datetime.now(timezone.utc)
 
-        warning_id = we.id
+            # 2) produce model response (ollama or stub)
+            span_gen_start = datetime.now(timezone.utc)
+            response_text, gen_meta = await ollama_generate_with_meta(prompt)
+            span_gen_end = datetime.now(timezone.utc)
 
-    # Jump user right to the new warning entry.
-    return RedirectResponse(url=f"/warnings#w-{warning_id}", status_code=302)
+            # 3) ingest trace
+            span_ing_start = datetime.now(timezone.utc)
+            trace = {
+                "trace_id": str(uuid.uuid4()),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "app_id": app_id,
+                "agent_id": agent_id,
+                "prompt": prompt,
+                "response": response_text,
+                "model": OLLAMA_MODEL,
+                "temperature": 0.2,
+                "tools": [],
+                "env": {"os": "linux"},
+            }
+            await client.post(f"{INGEST_URL}/ingest", json={"trace": trace})
+            span_ing_end = datetime.now(timezone.utc)
+        span_total_end = datetime.now(timezone.utc)
+        duration_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+
+        # store locally for dashboard history views
+        with get_session() as s:
+            # Load scenario data if scenario_id provided
+            scenario_code = None
+            expected_behavior = None
+            if scenario_id:
+                scenario = s.query(Scenario).filter(Scenario.id == scenario_id).first()
+                if scenario:
+                    scenario_code = scenario.code
+                    expected_behavior = scenario.expected_behavior
+
+            sr = ScenarioRun(
+                app_id=app_id,
+                agent_id=agent_id,
+                prompt=prompt,
+                scenario_id=scenario_id,
+                scenario_code=scenario_code,
+                expected_behavior=expected_behavior,
+                note="ran from dashboard"
+            )
+            s.add(sr)
+            s.flush()
+
+            tr = TraceRun(
+                scenario_run_id=sr.id,
+                app_id=app_id,
+                agent_id=agent_id,
+                name="scenario.run",
+                status="completed",
+                input_json=json.dumps({"prompt": prompt}),
+                output_json=json.dumps({"response": response_text, "warn": warn, "trace": {"trace_id": trace["trace_id"]}, "gen": gen_meta}),
+                duration_ms=duration_ms,
+            )
+            s.add(tr)
+            s.flush()
+
+            def _dur(a: datetime, b: datetime) -> int:
+                return int((b - a).total_seconds() * 1000)
+
+            # Parent span for the whole scenario run + child spans for steps.
+            parent_span = TraceSpan(
+                trace_run_id=tr.id,
+                parent_id=None,
+                name="scenario.run",
+                start_ts=span_total_start,
+                end_ts=span_total_end,
+                duration_ms=_dur(span_total_start, span_total_end),
+                meta_json=json.dumps({"app_id": app_id, "agent_id": agent_id}),
+            )
+            s.add(parent_span)
+            s.flush()
+
+            s.add(
+                TraceSpan(
+                    trace_run_id=tr.id,
+                    parent_id=parent_span.id,
+                    name="warn_policy.call",
+                    start_ts=span_warn_start,
+                    end_ts=span_warn_end,
+                    duration_ms=_dur(span_warn_start, span_warn_end),
+                    meta_json=json.dumps({"status": wresp.status_code, "pattern_id": warn.get("pattern_id"), "confidence": warn.get("confidence")}),
+                )
+            )
+            s.add(
+                TraceSpan(
+                    trace_run_id=tr.id,
+                    parent_id=parent_span.id,
+                    name="model.generate",
+                    start_ts=span_gen_start,
+                    end_ts=span_gen_end,
+                    duration_ms=_dur(span_gen_start, span_gen_end),
+                    meta_json=json.dumps({"model": OLLAMA_MODEL, "source": "ollama_or_stub", "provider": gen_meta.get("provider"), "latency_ms": gen_meta.get("latency_ms")}),
+                )
+            )
+            s.add(
+                TraceSpan(
+                    trace_run_id=tr.id,
+                    parent_id=parent_span.id,
+                    name="ingestion.ingest",
+                    start_ts=span_ing_start,
+                    end_ts=span_ing_end,
+                    duration_ms=_dur(span_ing_start, span_ing_end),
+                    meta_json=json.dumps({"trace_id": trace["trace_id"]}),
+                )
+            )
+            s.flush()
+            scenario_spans = s.query(TraceSpan).filter(TraceSpan.trace_run_id == tr.id).all()
+            try:
+                _generate_span_metric_points(
+                    s,
+                    trace_run_id=int(tr.id),
+                    ts=span_total_start,
+                    app_id=app_id,
+                    spans=scenario_spans,
+                )
+            except Exception as e:
+                logger.warning(f"scenario span metric generation failed: {e}")
+            we = WarningEvent(
+                app_id=app_id,
+                agent_id=agent_id,
+                action=str(warn.get("action")),
+                confidence=str(warn.get("confidence")),
+                pattern_id=warn.get("pattern_id"),
+                prompt=prompt,
+                message=str(warn.get("message")),
+                references_json=json.dumps(warn.get("references") or []),
+            )
+            s.add(we)
+            s.add(AuditEvent(actor_email=user.get("email"), action="scenario_run", details=f"app_id={app_id}"))
+            s.commit()
+
+            warning_id = we.id
+
+        # Jump user right to the new warning entry.
+        return RedirectResponse(url=f"/warnings#w-{warning_id}", status_code=302)
+    except Exception as e:
+        logger.exception(f"scenario run failed: {e}")
+        msg = quote(f"Scenario run failed: {str(e)[:120]}")
+        return RedirectResponse(url=f"/scenarios?error={msg}", status_code=303)
 
 
 @app.post("/datasets/{dataset_id}/examples/{example_id}/run")
@@ -3002,6 +8113,13 @@ async def run_detail(
             return RedirectResponse(url="/runs", status_code=302)
         spans = s.query(TraceSpan).filter(TraceSpan.trace_run_id == run_id).order_by(TraceSpan.start_ts.asc()).all()
         feedback = s.query(RunFeedback).filter(RunFeedback.trace_run_id == run_id).order_by(RunFeedback.ts.desc()).all()
+        corr_rows = (
+            s.query(ProfilerSample)
+            .filter(ProfilerSample.trace_run_id == int(run_id))
+            .order_by(ProfilerSample.cpu_ms.desc(), ProfilerSample.ts.desc())
+            .limit(20)
+            .all()
+        )
 
     # Derive quick UX signals from feedback history (most recent wins).
     thumb_state: str | None = None
@@ -3028,6 +8146,9 @@ async def run_detail(
 
     # Build a lightweight span tree and waterfall coordinates.
     span_items: list[dict[str, Any]] = []
+    flame_rects: list[dict[str, Any]] = []
+    trace_map_nodes: list[dict[str, Any]] = []
+    trace_map_edges: list[dict[str, Any]] = []
     if spans:
         # root start determines 0ms for bars
         root_start = min((sp.start_ts for sp in spans if sp.start_ts), default=None)
@@ -3071,6 +8192,52 @@ async def run_detail(
 
         _walk(None, 0)
 
+        # Flame graph rectangles (depth-based horizontal bars).
+        for item in span_items:
+            flame_rects.append(
+                {
+                    "name": str(item.get("name") or "span"),
+                    "depth": int(item.get("depth") or 0),
+                    "left": float(item.get("pct_left") or 0.0),
+                    "width": float(item.get("pct_width") or 0.0),
+                    "duration_ms": int(item.get("duration_ms") or 0),
+                }
+            )
+
+        # Trace map (parent span -> child span), with duration rollup.
+        by_id = {int(sp.id): sp for sp in spans if getattr(sp, "id", None) is not None}
+        edge_rollup: dict[tuple[str, str], dict[str, Any]] = {}
+        node_ids: set[str] = set()
+        for sp in spans:
+            src = "root"
+            if sp.parent_id is not None and int(sp.parent_id) in by_id:
+                src = str(by_id[int(sp.parent_id)].name or "unknown")
+            tgt = str(sp.name or "unknown")
+            node_ids.add(src)
+            node_ids.add(tgt)
+            key = (src, tgt)
+            cur = edge_rollup.get(key)
+            d = float(_to_int(sp.duration_ms, 0))
+            if not cur:
+                edge_rollup[key] = {"source": src, "target": tgt, "count": 1, "durations": [d]}
+            else:
+                cur["count"] += 1
+                cur["durations"].append(d)
+        trace_map_nodes = [{"id": n} for n in sorted(node_ids)]
+        trace_map_edges = []
+        for _, v in edge_rollup.items():
+            ds = sorted(v["durations"])
+            trace_map_edges.append(
+                {
+                    "source": v["source"],
+                    "target": v["target"],
+                    "count": int(v["count"]),
+                    "latency_avg_ms": float(sum(ds) / max(1, len(ds))),
+                    "latency_p95_ms": float(ds[max(0, int(len(ds) * 0.95) - 1)] if ds else 0.0),
+                }
+            )
+        trace_map_edges.sort(key=lambda x: (x["count"], x["latency_p95_ms"]), reverse=True)
+
     return templates.TemplateResponse(
         "run_detail.html",
         {
@@ -3085,6 +8252,10 @@ async def run_detail(
             "label_state": label_state,
             "spans": spans,
             "span_items": span_items,
+            "flame_rects": flame_rects,
+            "trace_map_nodes": trace_map_nodes,
+            "trace_map_edges": trace_map_edges,
+            "profile_correlation_rows": corr_rows,
         },
     )
 
@@ -3370,6 +8541,14 @@ async def playground_run(
         )
         s.add(span_total)
         s.add(span_model)
+        s.flush()
+        _generate_span_metric_points(
+            s,
+            trace_run_id=int(tr.id),
+            ts=started,
+            app_id=app_id,
+            spans=[span_total, span_model],
+        )
 
         # Optional: attach run to an experiment
         try:
