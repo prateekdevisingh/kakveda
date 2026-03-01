@@ -18,7 +18,7 @@ This note summarizes only documentation and positioning updates included for `v1
 ## Documentation Updates
 
 - Updated `README.md`:
-  - expanded "Latest Feature Rollup" timeline (`day-before-yesterday`, `yesterday`, `today`),
+  - expanded "Latest Feature Rollup" timeline,
   - consolidated pricing table for requested tools,
   - "What Makes Kakveda Unique" and easy setup guidance.
 - Updated `docs/COMPARISON.md`:
